@@ -16,8 +16,16 @@
   #edgelayer{position:absolute; left:0; top:0; overflow:visible; pointer-events:none;}
 
   .node{position:absolute; opacity:.55; transition:opacity .7s ease; cursor:pointer; user-select:none;
-    -webkit-user-select:none;}
+    -webkit-user-select:none; will-change:transform;}
+  #slidecard{position:absolute; width:380px; background:#fff; border:1.5px solid #DDD8CB; border-radius:16px;
+    padding:16px 20px 15px; box-shadow:0 2px 8px rgba(90,80,60,.08); opacity:0; pointer-events:none;
+    transition:opacity .55s ease .12s, left .7s ease, top .7s ease;}
+  #slidecard.in{opacity:1;}
+  #slidecard .t{font-weight:bold; font-size:21px; letter-spacing:-.01em; color:#1D1F23; line-height:1.2;}
+  #slidecard .c{font-size:12.5px; color:#62666F; font-style:italic; margin-top:6px; line-height:1.45;}
   .node.on{opacity:1;}
+  .node.hid{opacity:0 !important; pointer-events:none;}
+  .edge.hid, .elabel.hid{opacity:0 !important;}
   .node .t{font-weight:bold; line-height:1.22; letter-spacing:-.01em;}
   .node .s{font-size:11px; margin-top:3px; line-height:1.35;}
   .node .x{font-size:10px; margin-top:5px; line-height:1.5;
@@ -33,11 +41,20 @@
 
   .edge{fill:none; opacity:.08; transition:opacity .7s ease;}
   .edge.on{opacity:.9;} .edge.half{opacity:.3;}
-  .elabel{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px; opacity:0;
-    transition:opacity .7s ease; text-anchor:middle; paint-order:stroke; stroke-width:3px;}
+  .elabel{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; opacity:0;
+    transition:opacity .7s ease; text-anchor:middle; paint-order:stroke; stroke-width:4px;}
   .elabel.on{opacity:1;}
 
   #brand{position:fixed; top:18px; left:22px; font-size:12px; z-index:10; pointer-events:none; letter-spacing:.02em;}
+  #legend{position:fixed; top:42px; left:22px; z-index:10; pointer-events:none;
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px; color:#62666F;
+    background:#fff; border:1px solid #E7E3D9; border-radius:9px; padding:6px 11px;}
+  #legend i{display:inline-block; width:8px; height:8px; border-radius:99px; margin:0 4px 0 10px; vertical-align:-1px;}
+  #legend i:first-child{margin-left:0;}
+  #tip{position:fixed; z-index:30; max-width:270px; background:#1D1F23; color:#F3F1EA; font-size:11.5px;
+    line-height:1.5; padding:9px 12px; border-radius:9px; pointer-events:none; opacity:0;
+    transition:opacity .18s ease; font-family:Helvetica,Arial,sans-serif;}
+  #tip.show{opacity:.96;}
   #caption{position:fixed; left:22px; bottom:20px; z-index:10; max-width:min(580px,68vw); pointer-events:none;}
   #caption .num{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; margin-bottom:4px;}
   #caption .tt{font-size:20px; font-weight:bold; letter-spacing:-.01em;}
@@ -116,7 +133,9 @@ window.addEventListener("unhandledrejection", function(e){
 </script>
 
 <div id="brand"></div>
-<div id="hint">← → navigate · drag pan · scroll zoom<br>e edit · o overview · click dim node to travel</div>
+<div id="legend"><i style="background:#574CE3"></i>ideas<i style="background:#5E9430"></i>the new way<i style="background:#A87B3E"></i>the old way<i style="background:#9BA0A8"></i>things</div>
+<div id="tip"></div>
+<div id="hint">← → navigate · drag pan · scroll zoom<br>e edit · o overview · click dim node to travel · hover for detail</div>
 <div id="caption"><div class="num"></div><div class="tt"></div><div class="cc"></div></div>
 <div id="dots"></div>
 <div id="nav">
@@ -169,6 +188,7 @@ let deck, S;
 let nodes = {}, edgeObjs = [], scenes = [];
 let cur = 0, freeCam = false, editMode = false;
 let cam = {x:2000,y:1200,s:.3};
+let frameCount = 0;
 let camTarget = null;          // {x,y,s}
 let pushCtx = null;            // {cx,cy,rw,rh,margin} in world coords
 let posSnapshot = {};          // slideId -> {nodeId: [x,y]} for undo
@@ -195,8 +215,14 @@ function boot(newDeck){
 
   world.querySelectorAll(".node").forEach(n=>n.remove());
   svg.innerHTML = "";
-  nodes = {}; edgeObjs = []; scenes = []; posSnapshot = {};
+  nodes = {}; edgeObjs = []; scenes = []; posSnapshot = {}; lastCardScene = -1;
   $("#dots").innerHTML = "";
+  let card = document.getElementById("slidecard");
+  if(!card){
+    card = document.createElement("div"); card.id = "slidecard";
+    card.innerHTML = '<div class="t"></div><div class="c"></div>';
+  }
+  world.appendChild(card);
 
   deck.slides.forEach(sl=>{
     sl.layout = sl.layout || {};
@@ -285,8 +311,57 @@ function boot(newDeck){
 function homeX(n){ return n.slide.anchor[0] + n.def.pos[0]; }
 function homeY(n){ return n.slide.anchor[1] + n.def.pos[1]; }
 
-/* ---------------- scenes ---------------- */
+/* ---------------- scenes / reveal steps ---------------- */
 let actSet = new Set();
+let revealed = 0;   // reveal steps within the current slide (node step > revealed = hidden)
+function stepOf(sl, n){
+  if(n.slide === sl) return n.def.step || 0;
+  if(sl && sl.includeSteps && sl.includeSteps[n.id]) return sl.includeSteps[n.id];
+  return 0;
+}
+function isHidden(n){
+  const sl = scenes[cur] && scenes[cur].slide;
+  return !!(sl && stepOf(sl, n) > revealed);
+}
+function maxStep(sc){
+  if(!sc.slide) return 0;
+  let m = sc.slide.nodes.reduce((x,nd)=>Math.max(x, nd.step||0), 0);
+  if(sc.slide.includeSteps) for(const k in sc.slide.includeSteps) m = Math.max(m, sc.slide.includeSteps[k]);
+  return m;
+}
+function refreshEdgeHid(){
+  edgeObjs.forEach(eo=>{
+    const hid = nodes[eo.a].el.classList.contains("hid") || nodes[eo.b].el.classList.contains("hid");
+    eo.p.classList.toggle("hid", hid);
+    if(eo.lab) eo.lab.classList.toggle("hid", hid);
+  });
+}
+function updateVisibility(){
+  Object.values(nodes).forEach(n=> n.el.classList.toggle("hid", isHidden(n)));
+  refreshEdgeHid();
+}
+function visibleIds(sc){ return sc.ids.filter(id=>!isHidden(nodes[id])); }
+let staggerTimers = [];
+function staggerReveal(sc){
+  // reveal the freshly-unlocked nodes one by one, starting with whatever connects to what's in view
+  staggerTimers.forEach(clearTimeout); staggerTimers = [];
+  const fresh = sc.ids.filter(id => stepOf(sc.slide, nodes[id]) === revealed);
+  const vis = new Set(sc.ids.filter(id => !isHidden(nodes[id]) && !fresh.includes(id)));
+  const pool = new Set(fresh), order = [];
+  while(pool.size){
+    let pick = null;
+    for(const id of pool){
+      if(edgeObjs.some(e => (e.a===id && vis.has(e.b)) || (e.b===id && vis.has(e.a)))){ pick = id; break; }
+    }
+    if(!pick) pick = pool.values().next().value;
+    pool.delete(pick); vis.add(pick); order.push(pick);
+  }
+  order.forEach(id => nodes[id].el.classList.add("hid"));
+  refreshEdgeHid();
+  order.forEach((id,i)=>{
+    staggerTimers.push(setTimeout(()=>{ nodes[id].el.classList.remove("hid"); refreshEdgeHid(); }, 80 + i*140));
+  });
+}
 function highlight(ids, ov){
   actSet = new Set(ids);
   Object.values(nodes).forEach(n=> n.el.classList.toggle("on", actSet.has(n.id)));
@@ -300,12 +375,25 @@ function highlight(ids, ov){
     if(eo.lab) eo.lab.classList.toggle("on", ov ? isCross : both);
   });
 }
+let lastCardScene = -1;
+function updateNum(){
+  $("#caption .num").textContent = String(cur+1).padStart(2,"0")+" / "+scenes.length +
+    (maxStep(scenes[cur]) ? "  ·  "+revealed+"/"+maxStep(scenes[cur]) : "");
+}
+function setCard(title, cap, refade){
+  const card = $("#slidecard");
+  card.querySelector(".t").textContent = title;
+  card.querySelector(".c").textContent = cap || "";
+  if(refade){ card.classList.remove("in"); void card.offsetWidth; card.classList.add("in"); }
+}
 function applyScene(){
   const sc = scenes[cur];
-  highlight(sc.ids, !!sc.overview);
-  $("#caption .num").textContent = String(cur+1).padStart(2,"0")+" / "+scenes.length;
-  $("#caption .tt").textContent = sc.title;
-  $("#caption .cc").textContent = sc.cap;
+  hideTip();
+  highlight(visibleIds(sc), !!sc.overview);
+  updateVisibility();
+  updateNum();
+  setCard(sc.title, sc.cap, lastCardScene !== cur);
+  lastCardScene = cur;
   [...$("#dots").children].forEach((d,k)=>d.classList.toggle("on",k===cur));
   refreshPanel();
 }
@@ -316,6 +404,7 @@ function computeFit(){
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
   sc.ids.forEach(id=>{
     const n=nodes[id];
+    if(isHidden(n)) return;
     const hw = n.isRing? n.r : n.w/2, hh = n.isRing? n.r : n.h/2;
     x0=Math.min(x0,homeX(n)-hw); y0=Math.min(y0,homeY(n)-hh);
     x1=Math.max(x1,homeX(n)+hw); y1=Math.max(y1,homeY(n)+hh);
@@ -328,9 +417,21 @@ function computeFit(){
       x1=Math.max(x1,w.cx+w.rw); y1=Math.max(y1,w.cy+w.rh);
     }
   }
+  // floating title card sits above the slide content and is part of the fit
+  const card = $("#slidecard");
+  const noCard = sc.slide && sc.slide.layout && sc.slide.layout.noCard;
+  card.style.display = noCard ? "none" : "";
+  if(!noCard){
+    card.style.left = x0+"px";
+    const ch = card.offsetHeight || 110;
+    card.style.top = (y0 - ch - 70)+"px";
+    y0 = y0 - ch - 100;
+    x1 = Math.max(x1, x0 + 400);
+  }
+
   const pad = L.fitMargin ?? 150;
   const vw = innerWidth-(editMode?270:0), vh = innerHeight;
-  const s = Math.min(vw/(x1-x0+pad*2), vh/(y1-y0+pad*2+80), L.zoomMax ?? 1.15);
+  const s = Math.min(vw/(x1-x0+pad*2), vh/(y1-y0+pad*2+40), L.zoomMax ?? 1.15);
   const cx = (x0+x1)/2, cy = (y0+y1)/2 + 14;
   camTarget = {x:cx, y:cy, s};
   pushCtx = sc.overview ? null : {
@@ -342,10 +443,28 @@ function computeFit(){
 
 function go(i){
   cur = (i+scenes.length)%scenes.length;
+  revealed = 0;
   freeCam = false;
   applyScene();
   computeFit();
   if(scenes[cur].overview) startTour(); else stopTour();
+}
+function advance(){          // next = reveal the next step, or move to the next slide
+  if(revealed < maxStep(scenes[cur])){
+    revealed++;
+    const sc = scenes[cur];
+    hideTip();
+    highlight(visibleIds(sc), false);
+    updateVisibility();
+    staggerReveal(sc);
+    updateNum();
+    computeFit();
+  }
+  else go(cur+1);
+}
+function back(){
+  if(revealed > 0){ revealed--; applyScene(); computeFit(); }
+  else go(cur-1);
 }
 
 /* ---------------- finale tour: the window itself replays the slides ----------------
@@ -353,7 +472,7 @@ function go(i){
    slide's content window (same fit math), and highlight + push-out follow it. */
 let tour = null, tourRect = null;
 function slideWindow(i){
-  const sc = scenes[i], L = layoutOf(sc.slide);
+  const sc = scenes[i], L = layoutOf(sc.slide);   // steps count as revealed here (tour shows everything)
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
   sc.ids.forEach(id=>{
     const n=nodes[id];
@@ -393,7 +512,10 @@ function tourStep(now){
       // same highlight + push-out logic as visiting the slide — the box is the window
       highlight(scenes[tour.i].ids, false);
       pushCtx = {cx:tour.to.cx, cy:tour.to.cy, rw:tour.to.rw, rh:tour.to.rh, margin:tour.to.margin};
-      $("#caption .cc").textContent = "replaying — " + scenes[tour.i].title;
+      setCard(scenes[tour.i].title, scenes[tour.i].cap, false);
+      const tc = $("#slidecard");
+      tc.style.left = (tour.to.cx - tour.to.rw + 40)+"px";
+      tc.style.top = (tour.to.cy - tour.to.rh + 40)+"px";
     } else {
       tour.phase = "pause"; tour.until = now + 500;
     }
@@ -461,8 +583,11 @@ function frame(t){
     n.fy = homeY(n)+dyf+n.py+n.ty;
     n.el.style.transform = `translate(${n.fx-n.w/2}px, ${n.fy-n.h/2}px)`;
   });
+  if(tipFor) positionTip(tipFor);
 
-  // edges
+  // edges (every other frame — halves paint cost, kills fullscreen flicker)
+  frameCount++;
+  if(frameCount % 2) { requestAnimationFrame(frame); return; }
   edgeObjs.forEach(eo=>{
     const A=nodes[eo.a], B=nodes[eo.b];
     if(!A||!B) return;
@@ -517,14 +642,20 @@ function attachNodePointer(n){
   n.el.addEventListener("pointerup", ()=>{
     if(!dragging || dragging.n!==n) return;
     n.dragging=false;
-    if(!dragging.moved) travelTo(n.id);
+    if(!dragging.moved){
+      if(actSet.has(n.id) && n.def.tip){ tipFor===n ? hideTip() : showTip(n); }  // tap active node → tooltip
+      else travelTo(n.id);
+    }
     else if(editMode) computeFit();          // bounds may have changed
     dragging=null;
   });
+  n.el.addEventListener("pointerenter", ()=>{ if(n.def.tip && !n.el.classList.contains("hid")) showTip(n); });
+  n.el.addEventListener("pointerleave", ()=>{ if(tipFor===n) hideTip(); });
 }
 const touches = new Map();   // active pointers on the background (pan + pinch)
 let pinch = null;
 vp.addEventListener("pointerdown", e=>{
+  hideTip();
   touches.set(e.pointerId, {x:e.clientX, y:e.clientY});
   if(touches.size===1){
     panning={px:e.clientX,py:e.clientY,cx:cam.x,cy:cam.y};
@@ -577,17 +708,37 @@ vp.addEventListener("wheel", e=>{
   cam.y=wy0-(e.clientY-innerHeight/2)/cam.s;
 },{passive:false});
 
-$("#nextbtn").onclick=()=>go(cur+1);
-$("#prevbtn").onclick=()=>go(cur-1);
+$("#nextbtn").onclick=advance;
+$("#prevbtn").onclick=back;
 $("#ovbtn").onclick=()=>go(scenes.length-1);
 $("#editbtn").onclick=toggleEdit;
 addEventListener("keydown", e=>{
   if(e.target.tagName==="TEXTAREA"||e.target.tagName==="INPUT"||e.target.tagName==="SELECT") return;
-  if(e.key==="ArrowRight"||e.key===" ") go(cur+1);
-  else if(e.key==="ArrowLeft") go(cur-1);
+  if(e.key==="ArrowRight"||e.key===" ") advance();
+  else if(e.key==="ArrowLeft") back();
   else if(e.key.toLowerCase()==="o") go(scenes.length-1);
   else if(e.key.toLowerCase()==="e") toggleEdit();
 });
+
+/* ---------------- tooltips (node.tip) ---------------- */
+const tipEl = $("#tip");
+let tipFor = null;
+function showTip(n){
+  tipFor = n;
+  tipEl.textContent = n.def.tip;
+  tipEl.classList.add("show");
+  positionTip(n);
+}
+function positionTip(n){
+  const r = n.el.getBoundingClientRect();
+  tipEl.style.left = "0px"; tipEl.style.top = "0px";           // reset before measuring
+  const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+  let x = r.left + r.width/2 - tw/2, y = r.top - th - 10;
+  x = Math.max(10, Math.min(innerWidth - tw - 10, x));
+  if(y < 10) y = r.bottom + 10;
+  tipEl.style.left = x+"px"; tipEl.style.top = y+"px";
+}
+function hideTip(){ tipFor = null; tipEl.classList.remove("show"); }
 addEventListener("resize", ()=>{ if(!freeCam) computeFit(); });
 
 /* ---------------- edit panel ---------------- */
@@ -778,7 +929,7 @@ const EMBEDDED_DECK = {
       },
       "moves": {
         "stroke": "#8F86E8",
-        "width": 2,
+        "width": 3,
         "dash": "7 5",
         "labelColor": "#574CE3"
       },
@@ -813,14 +964,23 @@ const EMBEDDED_DECK = {
     {
       "id": "title",
       "title": "Graphs are awesome",
-      "caption": "because relationships are where the meaning lives — a talk told as the thing it is about",
+      "caption": "because relationships are where the meaning lives — I invest in graphs, and I build graphs (press next)",
       "anchor": [
         1689,
         1238
       ],
       "layout": {
-        "fitMargin": 210,
-        "zoomMax": 1.0
+        "fitMargin": 190,
+        "zoomMax": 1.0,
+        "noCard": true
+      },
+      "include": [
+        "co_falkordb",
+        "co_mem0"
+      ],
+      "includeSteps": {
+        "co_falkordb": 3,
+        "co_mem0": 3
       },
       "nodes": [
         {
@@ -830,8 +990,8 @@ const EMBEDDED_DECK = {
           "sub": "because relationships are where the meaning lives",
           "w": 300,
           "pos": [
-            -16,
-            -4
+            1,
+            -1
           ]
         },
         {
@@ -840,8 +1000,8 @@ const EMBEDDED_DECK = {
           "title": "Yohei Nakajima",
           "w": 150,
           "pos": [
-            -323,
-            192
+            -327,
+            191
           ]
         },
         {
@@ -850,9 +1010,141 @@ const EMBEDDED_DECK = {
           "title": "GraphCon · Jul 25 2026",
           "w": 175,
           "pos": [
-            261,
-            173
+            259,
+            163
           ]
+        },
+        {
+          "id": "n_invest",
+          "kind": "tiny indigo",
+          "title": "invest",
+          "w": 88,
+          "pos": [
+            -620,
+            300
+          ],
+          "step": 1
+        },
+        {
+          "id": "n_build",
+          "kind": "tiny indigo",
+          "title": "build",
+          "w": 80,
+          "pos": [
+            30,
+            330
+          ],
+          "step": 2
+        },
+        {
+          "id": "n_untapped",
+          "kind": "ink",
+          "title": "Untapped Capital",
+          "sub": "pre-seed fund",
+          "w": 175,
+          "pos": [
+            -920,
+            440
+          ],
+          "step": 3,
+          "tip": "Pre-seed venture fund backing unexpected founders — FalkorDB is in the portfolio."
+        },
+        {
+          "id": "n_agentfund",
+          "kind": "ink",
+          "title": "Agent Fund",
+          "sub": "agents backing agents",
+          "w": 165,
+          "pos": [
+            -560,
+            500
+          ],
+          "step": 3,
+          "tip": "Backing agent-native startups — Mem0 is in the portfolio."
+        },
+        {
+          "id": "y_babyagi",
+          "kind": "ink",
+          "title": "BabyAGI",
+          "sub": "Mar 2023",
+          "body": "a task list that runs itself",
+          "w": 165,
+          "pos": [
+            -51,
+            488
+          ],
+          "step": 4,
+          "tip": "The autonomous agent that started the task-loop wave — a task queue the agent creates, prioritizes, and executes. The tasks form a graph."
+        },
+        {
+          "id": "y_insta",
+          "kind": "ink",
+          "title": "InstaGraph",
+          "sub": "Sep 2023",
+          "body": "text → instant knowledge graph",
+          "w": 180,
+          "pos": [
+            -344,
+            640
+          ],
+          "step": 4,
+          "tip": "Paste text or a URL, get a knowledge graph. The moment converting anything into nodes and edges felt one-click."
+        },
+        {
+          "id": "y_mind",
+          "kind": "ink",
+          "title": "MindGraph",
+          "sub": "Mar 2024",
+          "body": "graph-native memory starter kit",
+          "w": 185,
+          "pos": [
+            -20,
+            700
+          ],
+          "step": 4,
+          "tip": "Open-source starter kit for graph-as-memory — an API-first proto-CRM where the graph is the database."
+        },
+        {
+          "id": "y_pretty",
+          "kind": "ink",
+          "title": "PrettyGraph",
+          "sub": "2024",
+          "body": "text → pretty graphs",
+          "w": 160,
+          "pos": [
+            250,
+            640
+          ],
+          "step": 4,
+          "tip": "A small experiment in making text-to-graph output beautiful. Same data, better drawing — order from chaos."
+        },
+        {
+          "id": "y_b2",
+          "kind": "ink",
+          "title": "BabyAGI 2",
+          "sub": "Sep 2024",
+          "body": "functionz — a self-building function graph",
+          "w": 195,
+          "pos": [
+            403,
+            485
+          ],
+          "step": 4,
+          "tip": "Rebuilt around a function registry: functions, their dependencies, and triggers stored as a graph the agent extends — the functiongraph."
+        },
+        {
+          "id": "y_active",
+          "kind": "ink",
+          "title": "ActiveGraph",
+          "sub": "2025 – 26",
+          "body": "event + context graphs for agents",
+          "w": 190,
+          "pos": [
+            650,
+            650
+          ],
+          "step": 4,
+          "tip": "Current work: event-sourced context graphs — the living state layer this talk keeps circling back to."
         }
       ],
       "edges": [
@@ -865,6 +1157,66 @@ const EMBEDDED_DECK = {
           "from": "t_hub",
           "to": "t_conf",
           "label": ":at"
+        },
+        {
+          "from": "t_speaker",
+          "to": "n_invest",
+          "label": ":does"
+        },
+        {
+          "from": "t_speaker",
+          "to": "n_build",
+          "label": ":does"
+        },
+        {
+          "from": "n_invest",
+          "to": "n_untapped",
+          "label": ":runs"
+        },
+        {
+          "from": "n_invest",
+          "to": "n_agentfund",
+          "label": ":runs"
+        },
+        {
+          "from": "n_untapped",
+          "to": "co_falkordb",
+          "label": ":backed"
+        },
+        {
+          "from": "n_agentfund",
+          "to": "co_mem0",
+          "label": ":backed"
+        },
+        {
+          "from": "n_build",
+          "to": "y_babyagi",
+          "label": ":shipped"
+        },
+        {
+          "from": "y_babyagi",
+          "to": "y_insta",
+          "label": ":then"
+        },
+        {
+          "from": "y_babyagi",
+          "to": "y_mind",
+          "label": ":then"
+        },
+        {
+          "from": "y_babyagi",
+          "to": "y_pretty",
+          "label": ":then"
+        },
+        {
+          "from": "y_babyagi",
+          "to": "y_b2",
+          "label": ":rebuilt_as"
+        },
+        {
+          "from": "y_b2",
+          "to": "y_active",
+          "label": ":then"
         }
       ]
     },
@@ -908,8 +1260,8 @@ const EMBEDDED_DECK = {
           "image": "chaos-lists",
           "w": 245,
           "pos": [
-            225,
-            82
+            213,
+            70
           ]
         }
       ],
@@ -929,7 +1281,7 @@ const EMBEDDED_DECK = {
     {
       "id": "everything",
       "title": "Everything is a graph",
-      "caption": "pick any domain and the entities are already pointing at each other — and the domains point at each other too",
+      "caption": "press next: ten real things, five domains, one interwoven graph",
       "anchor": [
         2128,
         811
@@ -941,8 +1293,8 @@ const EMBEDDED_DECK = {
           "title": "Everything is a graph",
           "w": 230,
           "pos": [
-            -25,
-            200
+            -38,
+            184
           ]
         },
         {
@@ -1001,9 +1353,119 @@ const EMBEDDED_DECK = {
           "body": "(claim)-[:based_on]->(src)",
           "w": 200,
           "pos": [
-            512,
-            -82
+            509,
+            -62
           ]
+        },
+        {
+          "id": "i_alice",
+          "kind": "tiny ink",
+          "title": "alice",
+          "w": 76,
+          "pos": [
+            -600,
+            430
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_bob",
+          "kind": "tiny ink",
+          "title": "bob",
+          "w": 70,
+          "pos": [
+            -367,
+            556
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_fund",
+          "kind": "tiny ink",
+          "title": "a fund",
+          "w": 86,
+          "pos": [
+            -361,
+            330
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_acme",
+          "kind": "tiny ink",
+          "title": "acme",
+          "w": 80,
+          "pos": [
+            -70,
+            450
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_car",
+          "kind": "tiny ink",
+          "title": "car",
+          "w": 66,
+          "pos": [
+            196,
+            572
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_wheel",
+          "kind": "tiny ink",
+          "title": "wheel",
+          "w": 82,
+          "pos": [
+            440,
+            450
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_nrt",
+          "kind": "tiny ink",
+          "title": "nrt",
+          "w": 64,
+          "pos": [
+            456,
+            627
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_sea",
+          "kind": "tiny ink",
+          "title": "sea",
+          "w": 66,
+          "pos": [
+            180,
+            330
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_claim",
+          "kind": "tiny ink",
+          "title": "a claim",
+          "w": 90,
+          "pos": [
+            -622,
+            627
+          ],
+          "step": 1
+        },
+        {
+          "id": "i_src",
+          "kind": "tiny ink",
+          "title": "the source",
+          "w": 110,
+          "pos": [
+            -110,
+            717
+          ],
+          "step": 1
         }
       ],
       "edges": [
@@ -1041,19 +1503,91 @@ const EMBEDDED_DECK = {
           "from": "ev_beliefs",
           "to": "ev_social",
           "label": ":held_by"
+        },
+        {
+          "from": "ev_social",
+          "to": "i_alice",
+          "label": ":e_g"
+        },
+        {
+          "from": "ev_business",
+          "to": "i_fund",
+          "label": ":e_g"
+        },
+        {
+          "from": "ev_beliefs",
+          "to": "i_claim",
+          "label": ":e_g"
+        },
+        {
+          "from": "i_alice",
+          "to": "i_bob",
+          "label": ":follows"
+        },
+        {
+          "from": "i_fund",
+          "to": "i_acme",
+          "label": ":invested"
+        },
+        {
+          "from": "i_bob",
+          "to": "i_acme",
+          "label": ":works_at"
+        },
+        {
+          "from": "i_acme",
+          "to": "i_sea",
+          "label": ":hq_at"
+        },
+        {
+          "from": "i_acme",
+          "to": "i_car",
+          "label": ":makes"
+        },
+        {
+          "from": "i_wheel",
+          "to": "i_car",
+          "label": ":part_of"
+        },
+        {
+          "from": "i_car",
+          "to": "i_nrt",
+          "label": ":parked_at"
+        },
+        {
+          "from": "i_alice",
+          "to": "i_nrt",
+          "label": ":flew_to"
+        },
+        {
+          "from": "i_claim",
+          "to": "i_alice",
+          "label": ":held_by"
+        },
+        {
+          "from": "i_claim",
+          "to": "i_src",
+          "label": ":based_on"
+        },
+        {
+          "from": "i_bob",
+          "to": "i_src",
+          "label": ":wrote"
         }
       ]
     },
     {
       "id": "rows-edges",
       "title": "Rows and edges",
-      "caption": "the same node, two views — rows are easy to inspect one by one; edges carry the relationships",
+      "caption": "same node, two views — Rows are the Chaos tables, Edges are the Order drawing",
       "anchor": [
         1577,
         955
       ],
       "include": [
-        "oc_data"
+        "oc_data",
+        "oc_order",
+        "oc_chaos"
       ],
       "nodes": [
         {
@@ -1076,8 +1610,8 @@ const EMBEDDED_DECK = {
           "body": "customer · invoice · ticket · team · policy",
           "w": 200,
           "pos": [
-            295,
-            103
+            316,
+            59
           ]
         }
       ],
@@ -1097,7 +1631,7 @@ const EMBEDDED_DECK = {
     {
       "id": "timeline",
       "title": "Agents got graph-shaped in public",
-      "caption": "2022 – 2025 · each pressure point forced one more graph into the stack — remember these, they come back",
+      "caption": "the talk track — thinking, then the world, then knowledge, then teams, then state itself, then tools and the traces they leave",
       "anchor": [
         2004,
         1436
@@ -1105,6 +1639,15 @@ const EMBEDDED_DECK = {
       "layout": {
         "fitMargin": 120
       },
+      "include": [
+        "ex_reason",
+        "ex_world",
+        "ex_know",
+        "ex_teams",
+        "st_hub",
+        "ex_tools",
+        "ex_traces"
+      ],
       "nodes": [
         {
           "id": "tl_hub",
@@ -1119,7 +1662,7 @@ const EMBEDDED_DECK = {
         },
         {
           "id": "tl_react",
-          "kind": "indigo",
+          "kind": "ink",
           "title": "ReAct",
           "sub": "Oct 2022",
           "body": "interleave reasoning + acting — the base loop",
@@ -1131,19 +1674,19 @@ const EMBEDDED_DECK = {
         },
         {
           "id": "tl_baby",
-          "kind": "green",
+          "kind": "ink",
           "title": "BabyAGI / AutoGPT / ToT",
           "sub": "Mar – May 2023",
-          "body": "task queues + reasoning trees — (yohei)-[:shipped]->(babyagi)",
+          "body": "task queues + reasoning trees",
           "w": 205,
           "pos": [
-            -603,
-            -108
+            -613,
+            -120
           ]
         },
         {
           "id": "tl_fc",
-          "kind": "indigo",
+          "kind": "ink",
           "title": "Function calling",
           "sub": "Jun 2023",
           "body": "structured tool edges from the model",
@@ -1155,62 +1698,62 @@ const EMBEDDED_DECK = {
         },
         {
           "id": "tl_ag",
-          "kind": "green",
+          "kind": "ink",
           "title": "AutoGen / Assistants API",
           "sub": "Sep – Nov 2023",
           "body": "agent teams + threads as state",
           "w": 190,
           "pos": [
-            -138,
-            -90
+            -112,
+            -121
           ]
         },
         {
           "id": "tl_lg",
-          "kind": "indigo",
+          "kind": "ink",
           "title": "LangGraph",
           "sub": "Jan 2024",
           "body": "explicit nodes, edges, cycles, checkpoints",
           "w": 175,
           "pos": [
-            149,
-            57
+            134,
+            71
           ]
         },
         {
           "id": "tl_gr",
-          "kind": "green",
+          "kind": "ink",
           "title": "Microsoft GraphRAG",
           "sub": "Jul 2024",
           "body": "retrieval over an entity graph + community summaries",
           "w": 190,
           "pos": [
-            408,
-            -60
+            415,
+            -118
           ]
         },
         {
           "id": "tl_mcp",
-          "kind": "indigo",
+          "kind": "ink",
           "title": "MCP",
           "sub": "Nov 2024",
           "body": "open standard — tools + resources as a context graph",
           "w": 180,
           "pos": [
-            619,
-            69
+            645,
+            56
           ]
         },
         {
           "id": "tl_op",
-          "kind": "green",
+          "kind": "ink",
           "title": "Operator / Responses API",
           "sub": "Jan – Mar 2025",
           "body": "computer use + agent as a primitive",
           "w": 195,
           "pos": [
-            873,
-            -51
+            847,
+            -77
           ]
         }
       ],
@@ -1254,6 +1797,90 @@ const EMBEDDED_DECK = {
           "from": "tl_mcp",
           "to": "tl_op",
           "label": ":then"
+        },
+        {
+          "from": "tl_react",
+          "to": "ex_reason",
+          "label": ":advanced",
+          "kind": "cross"
+        },
+        {
+          "from": "tl_baby",
+          "to": "ex_reason",
+          "label": ":advanced",
+          "kind": "cross"
+        },
+        {
+          "from": "tl_fc",
+          "to": "ex_tools",
+          "label": ":advanced",
+          "kind": "cross"
+        },
+        {
+          "from": "tl_ag",
+          "to": "ex_teams",
+          "label": ":advanced",
+          "kind": "cross"
+        },
+        {
+          "from": "tl_lg",
+          "to": "st_hub",
+          "label": ":put_state_on_the_graph",
+          "kind": "cross"
+        },
+        {
+          "from": "tl_gr",
+          "to": "ex_know",
+          "label": ":advanced",
+          "kind": "cross"
+        },
+        {
+          "from": "tl_mcp",
+          "to": "ex_tools",
+          "label": ":advanced",
+          "kind": "cross"
+        },
+        {
+          "from": "tl_op",
+          "to": "ex_world",
+          "label": ":advanced",
+          "kind": "cross"
+        },
+        {
+          "from": "ex_reason",
+          "to": "ex_world",
+          "label": ":then",
+          "kind": "cross"
+        },
+        {
+          "from": "ex_world",
+          "to": "ex_know",
+          "label": ":then",
+          "kind": "cross"
+        },
+        {
+          "from": "ex_know",
+          "to": "ex_teams",
+          "label": ":then",
+          "kind": "cross"
+        },
+        {
+          "from": "ex_teams",
+          "to": "st_hub",
+          "label": ":then",
+          "kind": "cross"
+        },
+        {
+          "from": "st_hub",
+          "to": "ex_tools",
+          "label": ":then",
+          "kind": "cross"
+        },
+        {
+          "from": "ex_tools",
+          "to": "ex_traces",
+          "label": ":result_in",
+          "kind": "cross"
         }
       ]
     },
@@ -1284,8 +1911,8 @@ const EMBEDDED_DECK = {
           "body": "classes, relations, constraints — designed before use",
           "w": 190,
           "pos": [
-            -535,
-            -244
+            -524,
+            -238
           ]
         },
         {
@@ -1295,8 +1922,8 @@ const EMBEDDED_DECK = {
           "sub": "built before anyone benefits",
           "w": 185,
           "pos": [
-            -499,
-            22
+            -491,
+            10
           ]
         },
         {
@@ -1306,8 +1933,8 @@ const EMBEDDED_DECK = {
           "sub": "finally — if anyone still trusts it",
           "w": 180,
           "pos": [
-            -506,
-            187
+            -519,
+            211
           ]
         },
         {
@@ -1317,8 +1944,8 @@ const EMBEDDED_DECK = {
           "sub": "no correction loop · stale facts",
           "w": 180,
           "pos": [
-            -295,
-            347
+            -208,
+            349
           ]
         },
         {
@@ -1432,15 +2059,10 @@ const EMBEDDED_DECK = {
     {
       "id": "job",
       "title": "The job, before and after",
-      "caption": "trust decay created a new job — from finishing the ontology to keeping the agent's living state trustworthy",
+      "caption": "press next: the old job becomes a new one — then meet the state it tends, and its five questions",
       "anchor": [
         2589,
         1058
-      ],
-      "include": [
-        "ev_hub",
-        "inv_decay",
-        "inv_ont_new"
       ],
       "nodes": [
         {
@@ -1449,11 +2071,12 @@ const EMBEDDED_DECK = {
           "title": "the old job",
           "sub": "finish the ontology",
           "body": "model every fact before anyone benefits",
-          "w": 190,
+          "w": 215,
           "pos": [
-            -450,
-            -210
-          ]
+            -455,
+            -182
+          ],
+          "tip": "Graph-first: months of modeling before the first user query. Ends in trust decay — see the inversion."
         },
         {
           "id": "st_after",
@@ -1461,11 +2084,13 @@ const EMBEDDED_DECK = {
           "title": "the new job",
           "sub": "keep living state trustworthy",
           "body": "harden what agents actually use",
-          "w": 195,
+          "w": 220,
           "pos": [
-            77,
-            -215
-          ]
+            121,
+            -170
+          ],
+          "step": 1,
+          "tip": "Agent-first: the workflow runs from day one and the job becomes tending the graph it generates."
         },
         {
           "id": "st_hub",
@@ -1474,9 +2099,10 @@ const EMBEDDED_DECK = {
           "sub": "memory · context · action",
           "w": 200,
           "pos": [
-            76,
-            103
-          ]
+            82,
+            164
+          ],
+          "step": 2
         },
         {
           "id": "st_id",
@@ -1485,20 +2111,22 @@ const EMBEDDED_DECK = {
           "sub": "who is who?",
           "w": 145,
           "pos": [
-            -349,
-            61
-          ]
+            -330,
+            285
+          ],
+          "step": 2
         },
         {
           "id": "st_perm",
-          "kind": "green",
+          "kind": "indigo",
           "title": "permissions",
           "sub": "who can see or act?",
           "w": 165,
           "pos": [
-            -277,
-            277
-          ]
+            -90,
+            410
+          ],
+          "step": 2
         },
         {
           "id": "st_time",
@@ -1507,20 +2135,22 @@ const EMBEDDED_DECK = {
           "sub": "what was true when?",
           "w": 170,
           "pos": [
-            79,
-            350
-          ]
+            165,
+            451
+          ],
+          "step": 2
         },
         {
           "id": "st_prov",
-          "kind": "green",
+          "kind": "indigo",
           "title": "provenance",
           "sub": "why believe this?",
           "w": 160,
           "pos": [
-            392,
-            280
-          ]
+            432,
+            415
+          ],
+          "step": 2
         },
         {
           "id": "st_corr",
@@ -1529,9 +2159,10 @@ const EMBEDDED_DECK = {
           "sub": "how does it improve?",
           "w": 170,
           "pos": [
-            460,
-            50
-          ]
+            586,
+            274
+          ],
+          "step": 2
         }
       ],
       "edges": [
@@ -1565,22 +2196,6 @@ const EMBEDDED_DECK = {
         {
           "from": "st_hub",
           "to": "st_corr"
-        },
-        {
-          "from": "st_hub",
-          "to": "ev_hub",
-          "label": ":one_world_graph"
-        },
-        {
-          "from": "inv_decay",
-          "to": "st_after",
-          "label": ":creates_the_job",
-          "kind": "chain"
-        },
-        {
-          "from": "inv_ont_new",
-          "to": "st_hub",
-          "label": ":governs"
         }
       ]
     },
@@ -1600,20 +2215,22 @@ const EMBEDDED_DECK = {
           "sub": "six segments · one stack",
           "w": 230,
           "pos": [
-            17,
-            -388
-          ]
+            28,
+            -416
+          ],
+          "tip": "The picks-and-shovels layer forming around living graphs — hover any segment or company for what it does and how it is doing."
         },
         {
           "id": "seg_db",
-          "kind": "indigo",
+          "kind": "ink",
           "title": "Graph databases",
           "sub": "store the world graph",
           "w": 195,
           "pos": [
-            -470,
-            -155
-          ]
+            -490,
+            -162
+          ],
+          "tip": "Databases purpose-built to store and traverse nodes and edges — the persistence layer for world graphs. Nine companies, from a ~$581M leader to fresh seeds."
         },
         {
           "id": "seg_build",
@@ -1622,9 +2239,10 @@ const EMBEDDED_DECK = {
           "sub": "documents → nodes + edges",
           "w": 200,
           "pos": [
-            -6,
-            -195
-          ]
+            -12,
+            -217
+          ],
+          "tip": "Turn unstructured stuff — documents, web pages, audio — into nodes and edges. The 'proposals' step of the agent-first loop, as an industry."
         },
         {
           "id": "seg_mem",
@@ -1635,7 +2253,8 @@ const EMBEDDED_DECK = {
           "pos": [
             470,
             -155
-          ]
+          ],
+          "tip": "Memory layers for agents built on temporal knowledge graphs — the living agent state this talk keeps pointing at. Already consolidating: Cognee wound down in 2026."
         },
         {
           "id": "seg_kg",
@@ -1646,7 +2265,8 @@ const EMBEDDED_DECK = {
           "pos": [
             -470,
             145
-          ]
+          ],
+          "tip": "The graph-first tradition: RDF, ontologies, semantic layers — now selling provenance and governance to GenAI buyers."
         },
         {
           "id": "seg_er",
@@ -1657,18 +2277,20 @@ const EMBEDDED_DECK = {
           "pos": [
             0,
             185
-          ]
+          ],
+          "tip": "Deduplicating people and companies across messy records — the 'identity' question as a product."
         },
         {
           "id": "seg_viz",
-          "kind": "tan",
+          "kind": "ink",
           "title": "Graph viz & investigation",
           "sub": "seeing the topology",
           "w": 215,
           "pos": [
             470,
             145
-          ]
+          ],
+          "tip": "Drawing the graph so humans can see the topology — investigation UIs and rendering SDKs. 'Order', productized."
         }
       ],
       "edges": [
@@ -1719,95 +2341,104 @@ const EMBEDDED_DECK = {
       "nodes": [
         {
           "id": "co_neo4j",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "Neo4j",
           "w": 88,
           "pos": [
             -642,
             -75
           ],
+          "tip": "Category leader — AuraDB cloud, GraphRAG / context-graph positioning. $200M+ ARR, 80+ of the Fortune 100.",
           "sub": "~$581M · category leader"
         },
         {
           "id": "co_tigergraph",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "TigerGraph",
           "w": 106,
           "pos": [
             -660,
             -155
           ],
+          "tip": "Native MPP graph database for real-time multi-hop analytics at petabyte scale. JPMC, Mastercard, Amex.",
           "sub": "$170M+ · FSI scale"
         },
         {
           "id": "co_memgraph",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "Memgraph",
           "w": 90,
           "pos": [
             -642,
             -235
-          ]
+          ],
+          "tip": "In-memory, Cypher-compatible, streaming-first — the popular drop-in Neo4j alternative for agent workloads. M12-backed."
         },
         {
           "id": "co_arangodb",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "ArangoDB",
           "w": 90,
           "pos": [
             -592,
             -301
-          ]
+          ],
+          "tip": "Multi-model: graph + vector + document + search in one engine; AutoGraph KG construction coming. ~$47M raised."
         },
         {
           "id": "co_hypermodedgrap",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "Hypermode (Dgraph)",
           "w": 170,
           "pos": [
-            -519,
-            -339
-          ]
+            -515,
+            -320
+          ],
+          "tip": "AI dev platform built around Dgraph, the distributed open-source graph DB it acquired. $9M seed."
         },
         {
           "id": "co_falkordb",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "FalkorDB",
           "w": 90,
           "pos": [
             -758,
             -56
-          ]
+          ],
+          "tip": "Ultra-low-latency RedisGraph successor (sparse-matrix based), purpose-built for GraphRAG. Tel Aviv seed."
         },
         {
           "id": "co_nebulagraph",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "NebulaGraph",
           "w": 114,
           "pos": [
             -770,
             -210
-          ]
+          ],
+          "tip": "Distributed open-source graph DB with trillion-edge deployments — dominant in Chinese internet cos. ~$40M+."
         },
         {
           "id": "co_ultipa",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "Ultipa",
           "w": 88,
           "pos": [
-            -707,
-            -347
-          ]
+            -708,
+            -346
+          ],
+          "tip": "HTAP graph DB claiming 10+ hop real-time traversal; FSI risk and fraud focus. $21M Series A."
         },
         {
           "id": "co_puppygraph",
-          "kind": "tiny indigo",
+          "kind": "tiny ink",
           "title": "PuppyGraph",
           "w": 106,
           "pos": [
-            -566,
-            -432
+            -584,
+            -446
           ],
+          "tip": "Zero-ETL graph query engine over Iceberg / Delta / Snowflake — query the lakehouse as a graph without moving it. Coinbase, eBay. $5M seed.",
           "sub": "zero-ETL on lakehouse"
         },
         {
@@ -1819,6 +2450,7 @@ const EMBEDDED_DECK = {
             -145,
             -345
           ],
+          "tip": "Crawls the whole web into a 10B-entity, 1T-fact knowledge graph, sold as APIs. Tencent-backed; famously capital-efficient.",
           "sub": "10B-entity web KG"
         },
         {
@@ -1827,9 +2459,10 @@ const EMBEDDED_DECK = {
           "title": "Lettria",
           "w": 88,
           "pos": [
-            -74,
-            -349
-          ]
+            -67,
+            -363
+          ],
+          "tip": "No-code NLP that turns complex documents into auditable knowledge graphs; GraphRAG for regulated industries. Paris."
         },
         {
           "id": "co_graphlit",
@@ -1837,9 +2470,10 @@ const EMBEDDED_DECK = {
           "title": "Graphlit",
           "w": 90,
           "pos": [
-            102,
-            -441
-          ]
+            110,
+            -422
+          ],
+          "tip": "API-first managed KG + RAG — ingest docs, audio, web into a graph with built-in retrieval for AI apps."
         },
         {
           "id": "co_whyhowai",
@@ -1847,9 +2481,10 @@ const EMBEDDED_DECK = {
           "title": "WhyHow.AI",
           "w": 98,
           "pos": [
-            213,
-            -327
-          ]
+            201,
+            -343
+          ],
+          "tip": "SDK for small, schema-controlled knowledge graphs — determinism for RAG and agent pipelines."
         },
         {
           "id": "co_mem0",
@@ -1857,21 +2492,11 @@ const EMBEDDED_DECK = {
           "title": "Mem0",
           "w": 88,
           "pos": [
-            599,
-            -252
+            677,
+            -232
           ],
+          "tip": "Universal memory layer on a hybrid vector-graph-KV store — 41K+ GitHub stars; AWS's exclusive memory provider for its Agent SDK.",
           "sub": "~$24M · AWS default"
-        },
-        {
-          "id": "co_cognee",
-          "kind": "tiny green",
-          "title": "Cognee",
-          "w": 88,
-          "pos": [
-            665,
-            -164
-          ],
-          "sub": "$7.5M seed · OSS"
         },
         {
           "id": "co_stardog",
@@ -1882,6 +2507,7 @@ const EMBEDDED_DECK = {
             -519,
             329
           ],
+          "tip": "Enterprise KG that virtualizes data without moving it; Voicebox markets 'hallucination-free' semantic parsing. NASA, Morgan Stanley.",
           "sub": "enterprise KG · Voicebox"
         },
         {
@@ -1890,9 +2516,10 @@ const EMBEDDED_DECK = {
           "title": "Graphwise (Ontotext)",
           "w": 186,
           "pos": [
-            -642,
-            225
-          ]
+            -612,
+            271
+          ],
+          "tip": "Ontotext + PoolParty merger — the largest independent semantic KG vendor; GraphRAG grounding for GenAI. BBC, AstraZeneca."
         },
         {
           "id": "co_franzallegrogr",
@@ -1900,9 +2527,10 @@ const EMBEDDED_DECK = {
           "title": "Franz (AllegroGraph)",
           "w": 186,
           "pos": [
-            -642,
-            65
-          ]
+            -658,
+            173
+          ],
+          "tip": "RDF + OWL reasoning + vectors for neuro-symbolic AI since 1984. Founder-owned; gov, pharma, intel."
         },
         {
           "id": "co_eccenca",
@@ -1910,9 +2538,10 @@ const EMBEDDED_DECK = {
           "title": "eccenca",
           "w": 88,
           "pos": [
-            -579,
-            430
-          ]
+            -609,
+            84
+          ],
+          "tip": "Corporate Memory — governed semantic data fabrics on W3C standards. Siemens, Bosch, Airbus, Bayer."
         },
         {
           "id": "co_metaphacts",
@@ -1920,9 +2549,11 @@ const EMBEDDED_DECK = {
           "title": "metaphacts",
           "w": 106,
           "pos": [
-            -746,
-            274
-          ]
+            -579,
+            430
+          ],
+          "tip": "metaphactory platform for ontology modeling and semantic search — acquired by Digital Science (2022).",
+          "sub": "acquired"
         },
         {
           "id": "co_timbrai",
@@ -1930,9 +2561,22 @@ const EMBEDDED_DECK = {
           "title": "Timbr.ai",
           "w": 90,
           "pos": [
-            -758,
-            46
-          ]
+            -746,
+            274
+          ],
+          "tip": "SQL-native semantic layer that turns existing warehouses into virtual knowledge graphs — ontologies in plain SQL."
+        },
+        {
+          "id": "co_relationalai",
+          "kind": "tiny tan",
+          "title": "RelationalAI",
+          "w": 122,
+          "pos": [
+            -777,
+            47
+          ],
+          "tip": "Relational knowledge graphs as a Snowflake-native coprocessor — rules, reasoning, and graph analytics over enterprise data.",
+          "sub": "~$122M raised"
         },
         {
           "id": "co_quantexa",
@@ -1943,6 +2587,7 @@ const EMBEDDED_DECK = {
             103,
             350
           ],
+          "tip": "Decision intelligence: 99%-accuracy entity resolution + graph analytics for AML / fraud / KYC. $100M+ ARR; HSBC, HMRC.",
           "sub": "$2.6B valuation"
         },
         {
@@ -1954,6 +2599,7 @@ const EMBEDDED_DECK = {
             0,
             380
           ],
+          "tip": "Jeff Jonas's entity-resolution engine, embedded in customer infra, validated to ~100B records; OEM'd by IBM and Esri.",
           "sub": "bootstrapped · 100B records"
         },
         {
@@ -1964,37 +2610,42 @@ const EMBEDDED_DECK = {
           "pos": [
             -103,
             350
-          ]
+          ],
+          "tip": "Serverless real-time entity-resolution API; IdentityRAG grounds LLMs in resolved customer data. Berlin."
         },
         {
           "id": "co_linkurious",
-          "kind": "tiny tan",
+          "kind": "tiny ink",
           "title": "Linkurious",
           "w": 106,
           "pos": [
             664,
             121
-          ]
+          ],
+          "tip": "Graph investigation UI used by the ICIJ for the Panama Papers; AML, fraud, intel. Acquired by Nuix (2026).",
+          "sub": "acquired"
         },
         {
           "id": "co_cambridgeintel",
-          "kind": "tiny tan",
+          "kind": "tiny ink",
           "title": "Cambridge Intelligence",
           "w": 190,
           "pos": [
             647,
             227
-          ]
+          ],
+          "tip": "KeyLines / ReGraph JavaScript SDKs for graph visualization in mission-critical intel and security apps. Bootstrapped, profitable."
         },
         {
           "id": "co_graphistry",
-          "kind": "tiny tan",
+          "kind": "tiny ink",
           "title": "Graphistry",
           "w": 106,
           "pos": [
             576,
             309
-          ]
+          ],
+          "tip": "GPU-accelerated graph visualization — a million nodes in-browser; Louie.ai adds GenAI-native investigation. In-Q-Tel, NVIDIA."
         }
       ],
       "edges": [
@@ -2055,10 +2706,6 @@ const EMBEDDED_DECK = {
           "to": "co_mem0"
         },
         {
-          "from": "seg_mem",
-          "to": "co_cognee"
-        },
-        {
           "from": "seg_kg",
           "to": "co_stardog"
         },
@@ -2081,6 +2728,10 @@ const EMBEDDED_DECK = {
         {
           "from": "seg_kg",
           "to": "co_timbrai"
+        },
+        {
+          "from": "seg_kg",
+          "to": "co_relationalai"
         },
         {
           "from": "seg_er",
@@ -2115,101 +2766,238 @@ const EMBEDDED_DECK = {
     {
       "id": "map",
       "title": "Pick your graph",
-      "caption": "the tech from the history is the on-ramp — pick a graph type, prototype, then push where it breaks",
+      "caption": "six routes, one column each — the idea, then press next: what to build, then where to beat SOTA",
       "anchor": [
         2252,
         1193
-      ],
-      "include": [
-        "tl_ag",
-        "tl_lg",
-        "tl_gr",
-        "tl_mcp",
-        "tl_op"
       ],
       "nodes": [
         {
           "id": "ex_hub",
           "kind": "hub ink",
           "title": "Pick your graph",
-          "sub": "try → prototype → push the frontier",
+          "sub": "idea → build it → beat SOTA",
           "w": 235,
           "pos": [
-            59,
-            -161
-          ]
-        },
-        {
-          "id": "ex_teams",
-          "kind": "green",
-          "title": "Agent teams",
-          "sub": "handoff / role graphs",
-          "body": "frontier: topology learning",
-          "w": 180,
-          "pos": [
-            -700,
-            100
+            10,
+            -332
           ]
         },
         {
           "id": "ex_reason",
           "kind": "indigo",
           "title": "Reasoning / plans",
-          "sub": "branch → score → select",
-          "body": "frontier: verifier evals",
+          "sub": "branches, search, dependencies",
           "w": 185,
           "pos": [
-            -443,
-            56
-          ]
+            -650,
+            -110
+          ],
+          "tip": "The core idea: multi-agent systems are role / message / handoff graphs. Dashed edges point at the history that advanced it."
+        },
+        {
+          "id": "ex_world",
+          "kind": "indigo",
+          "title": "World / UI",
+          "sub": "agents map the interface",
+          "w": 175,
+          "pos": [
+            -401,
+            -75
+          ],
+          "tip": "The core idea: plans are trees and DAGs — branch, score, select. ReAct, ToT, and LangGraph all advanced this."
         },
         {
           "id": "ex_know",
           "kind": "indigo",
           "title": "Knowledge / memory",
-          "sub": "event-sourced temporal KG",
-          "body": "frontier: identity + time benchmarks",
-          "w": 195,
+          "sub": "retrieval becomes durable context",
+          "w": 200,
           "pos": [
-            -180,
-            100
-          ]
+            -121,
+            -80
+          ],
+          "tip": "The core idea: memory is an event-sourced knowledge graph — facts carry provenance and time."
+        },
+        {
+          "id": "ex_teams",
+          "kind": "indigo",
+          "title": "Agent teams",
+          "sub": "workers, roles, handoffs",
+          "w": 175,
+          "pos": [
+            130,
+            -130
+          ],
+          "tip": "The core idea: tools form a typed registry with permission edges — MCP made it a standard."
         },
         {
           "id": "ex_tools",
-          "kind": "tan",
+          "kind": "indigo",
           "title": "Tools / skills",
-          "sub": "typed registry + permission edges",
-          "body": "frontier: safety invariants",
-          "w": 190,
+          "sub": "skills + code as dependency graphs",
+          "w": 195,
           "pos": [
-            88,
-            38
-          ]
-        },
-        {
-          "id": "ex_world",
-          "kind": "green",
-          "title": "World / UI",
-          "sub": "DOM → affordance graph",
-          "body": "frontier: robust state abstraction",
-          "w": 185,
-          "pos": [
-            340,
-            100
-          ]
+            419,
+            -121
+          ],
+          "tip": "The core idea: a screen is an affordance graph — states and actions, not pixels."
         },
         {
           "id": "ex_traces",
           "kind": "indigo",
           "title": "Traces / evals",
-          "sub": "run trace as replayable graph",
-          "body": "frontier: replay / fork / diff loops",
+          "sub": "logs that look like a graph",
           "w": 190,
           "pos": [
-            646,
-            78
-          ]
+            650,
+            -130
+          ],
+          "tip": "The core idea: an agent run is a graph you can replay, fork, and diff."
+        },
+        {
+          "id": "b_reason",
+          "kind": "green",
+          "title": "branch → score → select planner",
+          "sub": "build this",
+          "w": 195,
+          "pos": [
+            -651,
+            151
+          ],
+          "step": 1
+        },
+        {
+          "id": "b_world",
+          "kind": "green",
+          "title": "affordance graph of one site",
+          "sub": "build this",
+          "w": 190,
+          "pos": [
+            -416,
+            220
+          ],
+          "step": 1
+        },
+        {
+          "id": "b_know",
+          "kind": "green",
+          "title": "temporal KG of your inbox",
+          "sub": "build this",
+          "w": 185,
+          "pos": [
+            -123,
+            141
+          ],
+          "step": 1
+        },
+        {
+          "id": "b_teams",
+          "kind": "green",
+          "title": "handoff graph for 3 agents",
+          "sub": "build this",
+          "w": 185,
+          "pos": [
+            148,
+            236
+          ],
+          "step": 1
+        },
+        {
+          "id": "b_tools",
+          "kind": "green",
+          "title": "typed registry + permissions",
+          "sub": "build this",
+          "w": 190,
+          "pos": [
+            390,
+            150
+          ],
+          "step": 1
+        },
+        {
+          "id": "b_traces",
+          "kind": "green",
+          "title": "replayable trace of one agent",
+          "sub": "build this",
+          "w": 195,
+          "pos": [
+            681,
+            217
+          ],
+          "step": 1
+        },
+        {
+          "id": "s_reason",
+          "kind": "indigo",
+          "title": "verifier-guided search",
+          "sub": "beat SOTA here",
+          "w": 175,
+          "pos": [
+            -649,
+            399
+          ],
+          "step": 2
+        },
+        {
+          "id": "s_world",
+          "kind": "indigo",
+          "title": "cross-app state abstraction",
+          "sub": "beat SOTA here",
+          "w": 190,
+          "pos": [
+            -390,
+            440
+          ],
+          "step": 2
+        },
+        {
+          "id": "s_know",
+          "kind": "indigo",
+          "title": "identity + time benchmarks",
+          "sub": "beat SOTA here",
+          "w": 185,
+          "pos": [
+            -123,
+            423
+          ],
+          "step": 2
+        },
+        {
+          "id": "s_teams",
+          "kind": "indigo",
+          "title": "learned team topologies",
+          "sub": "beat SOTA here",
+          "w": 180,
+          "pos": [
+            130,
+            440
+          ],
+          "step": 2
+        },
+        {
+          "id": "s_tools",
+          "kind": "indigo",
+          "title": "skill discovery + safety invariants",
+          "sub": "beat SOTA here",
+          "w": 200,
+          "pos": [
+            359,
+            407
+          ],
+          "step": 2
+        },
+        {
+          "id": "s_traces",
+          "kind": "indigo",
+          "title": "replay / fork / diff loops",
+          "sub": "beat SOTA here",
+          "w": 180,
+          "pos": [
+            650,
+            440
+          ],
+          "step": 2
         },
         {
           "id": "t_zep",
@@ -2218,9 +3006,10 @@ const EMBEDDED_DECK = {
           "sub": "temporal memory graphs",
           "w": 160,
           "pos": [
-            -197,
-            355
-          ]
+            -343,
+            16
+          ],
+          "tip": "Agent memory on Graphiti, an open-source temporal knowledge graph engine — sub-200ms context retrieval."
         },
         {
           "id": "t_lsmith",
@@ -2229,9 +3018,10 @@ const EMBEDDED_DECK = {
           "sub": "trace observability",
           "w": 175,
           "pos": [
-            600,
-            301
-          ]
+            529,
+            5
+          ],
+          "tip": "Trace tooling — the raw material for treating runs as replayable graphs."
         }
       ],
       "edges": [
@@ -2261,32 +3051,67 @@ const EMBEDDED_DECK = {
         },
         {
           "from": "ex_teams",
-          "to": "tl_ag",
-          "label": ":try"
+          "to": "b_teams",
+          "label": ":build"
         },
         {
           "from": "ex_reason",
-          "to": "tl_lg",
-          "label": ":try"
+          "to": "b_reason",
+          "label": ":build"
         },
         {
           "from": "ex_know",
-          "to": "tl_gr",
-          "label": ":try"
+          "to": "b_know",
+          "label": ":build"
+        },
+        {
+          "from": "ex_tools",
+          "to": "b_tools",
+          "label": ":build"
+        },
+        {
+          "from": "ex_world",
+          "to": "b_world",
+          "label": ":build"
+        },
+        {
+          "from": "ex_traces",
+          "to": "b_traces",
+          "label": ":build"
+        },
+        {
+          "from": "b_teams",
+          "to": "s_teams",
+          "label": ":then_beat"
+        },
+        {
+          "from": "b_reason",
+          "to": "s_reason",
+          "label": ":then_beat"
+        },
+        {
+          "from": "b_know",
+          "to": "s_know",
+          "label": ":then_beat"
+        },
+        {
+          "from": "b_tools",
+          "to": "s_tools",
+          "label": ":then_beat"
+        },
+        {
+          "from": "b_world",
+          "to": "s_world",
+          "label": ":then_beat"
+        },
+        {
+          "from": "b_traces",
+          "to": "s_traces",
+          "label": ":then_beat"
         },
         {
           "from": "ex_know",
           "to": "t_zep",
-          "label": ":try"
-        },
-        {
-          "from": "ex_tools",
-          "to": "tl_mcp",
-          "label": ":try"
-        },
-        {
-          "from": "ex_world",
-          "to": "tl_op",
           "label": ":try"
         },
         {
@@ -2517,8 +3342,8 @@ const EMBEDDED_DECK = {
           "title": "you",
           "w": 90,
           "pos": [
-            -120,
-            -50
+            -126,
+            -44
           ]
         },
         {
@@ -2555,15 +3380,33 @@ const EMBEDDED_DECK = {
       "kind": "cross"
     },
     {
-      "from": "ex_reason",
-      "to": "tl_baby",
-      "label": ":tot_lineage",
-      "kind": "cross"
-    },
-    {
       "from": "st_corr",
       "to": "inv_val",
       "label": ":same_muscle",
+      "kind": "cross"
+    },
+    {
+      "from": "inv_decay",
+      "to": "st_after",
+      "label": ":creates_the_job",
+      "kind": "cross"
+    },
+    {
+      "from": "st_hub",
+      "to": "ev_hub",
+      "label": ":one_world_graph",
+      "kind": "cross"
+    },
+    {
+      "from": "y_babyagi",
+      "to": "tl_baby",
+      "label": ":that_babyagi",
+      "kind": "cross"
+    },
+    {
+      "from": "y_active",
+      "to": "st_time",
+      "label": ":obsessed_with",
       "kind": "cross"
     },
     {
@@ -2576,6 +3419,12 @@ const EMBEDDED_DECK = {
       "from": "st_id",
       "to": "ex_know",
       "label": ":benchmarked_by",
+      "kind": "cross"
+    },
+    {
+      "from": "inv_ont_new",
+      "to": "st_hub",
+      "label": ":governs",
       "kind": "cross"
     },
     {
