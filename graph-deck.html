@@ -1,0 +1,2728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>graph-deck</title>
+<style>
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; overflow:hidden; font-family:Helvetica,Arial,sans-serif;}
+  #viewport{position:fixed; inset:0; touch-action:none; cursor:grab; overflow:hidden;}
+  #viewport.dragging{cursor:grabbing;}
+  #world{position:absolute; left:0; top:0; width:100px; height:100px; transform-origin:0 0;}
+  #bootmsg{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:60;
+    background:#FCFBF7; text-align:center; padding:30px;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:13px; color:#62666F; line-height:1.7;}
+  #edgelayer{position:absolute; left:0; top:0; overflow:visible; pointer-events:none;}
+
+  .node{position:absolute; opacity:.55; transition:opacity .7s ease; cursor:pointer; user-select:none;
+    -webkit-user-select:none;}
+  .node.on{opacity:1;}
+  .node .t{font-weight:bold; line-height:1.22; letter-spacing:-.01em;}
+  .node .s{font-size:11px; margin-top:3px; line-height:1.35;}
+  .node .x{font-size:10px; margin-top:5px; line-height:1.5;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+  .node.is-ring{display:flex; flex-direction:column; align-items:center; justify-content:center;}
+
+  .minilists{display:flex; gap:7px; margin-top:6px;}
+  .minilists .col{border:1px solid #E7E3D9; border-radius:6px; padding:5px 8px; background:#fff;
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:8.5px; color:#1D1F23;}
+  .minilists .col .h{color:#9BA0A8; border-bottom:1px solid #E7E3D9; margin-bottom:3px; padding-bottom:2px;}
+  .minilists .col div{line-height:1.55; white-space:nowrap;}
+  .minilists .d{color:#6FA83C;} .minilists .e{color:#A87B3E;}
+
+  .edge{fill:none; opacity:.08; transition:opacity .7s ease;}
+  .edge.on{opacity:.9;} .edge.half{opacity:.3;}
+  .elabel{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px; opacity:0;
+    transition:opacity .7s ease; text-anchor:middle; paint-order:stroke; stroke-width:3px;}
+  .elabel.on{opacity:1;}
+
+  #brand{position:fixed; top:18px; left:22px; font-size:12px; z-index:10; pointer-events:none; letter-spacing:.02em;}
+  #caption{position:fixed; left:22px; bottom:20px; z-index:10; max-width:min(580px,68vw); pointer-events:none;}
+  #caption .num{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; margin-bottom:4px;}
+  #caption .tt{font-size:20px; font-weight:bold; letter-spacing:-.01em;}
+  #caption .cc{font-size:12.5px; font-style:italic; margin-top:4px; line-height:1.4;}
+  #nav{position:fixed; right:22px; bottom:20px; z-index:10; display:flex; gap:8px; align-items:center;}
+  #nav button{border:1.5px solid #E7E3D9; background:#fff; border-radius:999px; width:42px; height:42px;
+    font-size:17px; cursor:pointer;}
+  #nav button.wide{width:auto; padding:0 15px; font-size:12px; font-family:ui-monospace,Menlo,Consolas,monospace;}
+  #nav button:hover{border-color:#574CE3; color:#574CE3;}
+  #dots{position:fixed; bottom:74px; right:26px; display:flex; gap:5px; z-index:10;}
+  #dots i{width:6px; height:6px; border-radius:999px; background:#E7E3D9; cursor:pointer; transition:background .3s;}
+  #dots i.on{background:#574CE3;}
+  #hint{position:fixed; top:18px; right:22px; font-size:11px; z-index:10; text-align:right;
+    font-family:ui-monospace,Menlo,Consolas,monospace; pointer-events:none; line-height:1.6;}
+
+  #panel{position:fixed; top:0; right:0; bottom:0; width:270px; background:rgba(255,255,255,.94);
+    border-left:1px solid #E7E3D9; z-index:20; padding:18px 18px 90px; overflow-y:auto;
+    transform:translateX(100%); transition:transform .35s ease;
+    font-family:ui-monospace,Menlo,Consolas,monospace;}
+  #panel.open{transform:translateX(0);}
+  #panel h3{font-size:12px; color:#1D1F23; margin-bottom:2px; font-family:Helvetica,Arial,sans-serif;}
+  #panel .slidename{font-size:10px; color:#9BA0A8; margin-bottom:14px; word-break:break-all;}
+  #panel .row{margin-bottom:11px;}
+  #panel label{display:flex; justify-content:space-between; font-size:10px; color:#62666F; margin-bottom:3px;}
+  #panel label b{color:#574CE3; font-weight:normal;}
+  #panel input[type=range]{width:100%; accent-color:#574CE3;}
+  #panel .btns{display:flex; flex-direction:column; gap:7px; margin-top:16px;}
+  #panel button{border:1.5px solid #E7E3D9; background:#fff; border-radius:8px; padding:8px 10px;
+    font-size:11px; cursor:pointer; font-family:inherit; text-align:left;}
+  #panel button:hover{border-color:#574CE3; color:#574CE3;}
+  #panel .note{font-size:9.5px; color:#9BA0A8; margin-top:14px; line-height:1.6;}
+  #jsonmodal{position:fixed; inset:0; background:rgba(29,31,35,.45); z-index:40; display:none;
+    align-items:center; justify-content:center;}
+  #jsonmodal.open{display:flex;}
+  #jsonmodal .box{background:#fff; border-radius:14px; padding:18px; width:min(720px,90vw); height:min(560px,80vh);
+    display:flex; flex-direction:column; gap:10px;}
+  #jsonmodal textarea{flex:1; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10.5px;
+    border:1px solid #E7E3D9; border-radius:8px; padding:10px; resize:none;}
+  #jsonmodal .mrow{display:flex; gap:8px; justify-content:flex-end;}
+  #jsonmodal button{border:1.5px solid #E7E3D9; background:#fff; border-radius:8px; padding:7px 14px;
+    font-size:12px; cursor:pointer;}
+  #toast{position:fixed; top:60px; right:22px; z-index:50; background:#1D1F23; color:#fff; font-size:12px;
+    padding:9px 16px; border-radius:999px; opacity:0; transition:opacity .3s;
+    font-family:ui-monospace,Menlo,Consolas,monospace; pointer-events:none;}
+  #toast.show{opacity:1;}
+  @media (max-width:700px){
+    #hint{display:none;} #dots{display:none;}
+    #caption{bottom:86px; max-width:calc(100vw - 44px);}
+    #caption .tt{font-size:16px;} #caption .cc{font-size:11.5px;}
+    #nav{left:22px; right:22px; justify-content:flex-end;}
+    #nav button{width:38px; height:38px; font-size:15px;}
+    #nav button.wide{padding:0 11px; font-size:11px; height:38px;}
+    #panel{width:min(270px, 86vw);}
+  }
+</style>
+</head>
+<body>
+<div id="viewport"><div id="world"><svg id="edgelayer" width="100" height="100"></svg></div></div>
+<div id="bootmsg">loading the graph…<br><br>if this message stays, this preview can’t run scripts —<br>download the file and open it in a browser.</div>
+<script>
+// surface any failure on screen instead of a silent blank page
+function __showErr(msg, line, err){
+  var b = document.getElementById("bootmsg");
+  if(!b) return;
+  var stack = (err && err.stack) ? String(err.stack).split("\n").slice(0,4).join("<br>") : "";
+  b.style.display = "flex";
+  b.innerHTML = "something went wrong loading the deck:<br><br><b>" + msg + "</b>" +
+    (line ? " (line " + line + ")" : "") +
+    (stack ? "<br><br><span style='font-size:10px'>" + stack + "</span>" : "") +
+    "<br><br><span style='font-size:10px'>" + navigator.userAgent + "</span>";
+}
+window.onerror = function(msg, src, line, col, err){ __showErr(msg, line, err); };
+window.addEventListener("unhandledrejection", function(e){
+  __showErr(e.reason && e.reason.message ? e.reason.message : String(e.reason), 0, e.reason);
+});
+</script>
+
+<div id="brand"></div>
+<div id="hint">← → navigate · drag pan · scroll zoom<br>e edit · o overview · click dim node to travel</div>
+<div id="caption"><div class="num"></div><div class="tt"></div><div class="cc"></div></div>
+<div id="dots"></div>
+<div id="nav">
+  <button class="wide" id="editbtn">edit</button>
+  <button class="wide" id="ovbtn">whole graph</button>
+  <button id="prevbtn">‹</button>
+  <button id="nextbtn">›</button>
+</div>
+
+<div id="panel">
+  <h3>slide view</h3>
+  <div class="slidename"></div>
+  <div id="sliders"></div>
+  <div class="btns">
+    <button id="copyjson">copy deck JSON</button>
+    <button id="viewjson">view / paste JSON…</button>
+    <button id="loadjson">load .json file…</button>
+    <button id="undolayout">undo layout edits on this slide</button>
+  </div>
+  <div class="note">drag any node to move it — in edit mode the new position is written into the deck (in view mode it springs back). “copy deck JSON” exports everything, including moved nodes and slider changes.</div>
+  <input type="file" id="filein" accept=".json,application/json" style="display:none">
+</div>
+
+<div id="jsonmodal"><div class="box">
+  <textarea spellcheck="false"></textarea>
+  <div class="mrow"><button id="applyjson">apply</button><button id="closejson">close</button></div>
+</div></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ============================================================
+   graph-deck — a knowledge-graph presentation engine (no forces).
+   Nodes live at authored positions and float free. On slide switch
+   the camera centers + zooms to the slide's nodes with a margin,
+   and every node not in the slide glides out past the window edge.
+   ============================================================ */
+
+const $ = s => document.querySelector(s);
+const world = $("#world"), svg = $("#edgelayer"), vp = $("#viewport");
+
+const LAYOUT_SCHEMA = [
+  ["floatAmp",   0, 12, .5, "float"],
+  ["fitMargin", 40, 340, 10, "fit margin"],
+  ["pushMargin", 0, 420, 10, "push margin"],
+  ["zoomMax",   .5, 1.6, .05, "max zoom"],
+];
+
+let deck, S;
+let nodes = {}, edgeObjs = [], scenes = [];
+let cur = 0, freeCam = false, editMode = false;
+let cam = {x:2000,y:1200,s:.3};
+let camTarget = null;          // {x,y,s}
+let pushCtx = null;            // {cx,cy,rw,rh,margin} in world coords
+let posSnapshot = {};          // slideId -> {nodeId: [x,y]} for undo
+
+function layoutOf(sl){ return Object.assign({}, deck.layoutDefaults||{}, (sl&&sl.layout)||{}); }
+function styleFor(kindStr, map){
+  const out = Object.assign({}, map.default || {});
+  (kindStr||"").split(/\s+/).forEach(k=>{ if(map[k]) Object.assign(out, map[k]); });
+  return out;
+}
+
+/* ---------------- boot ---------------- */
+function boot(newDeck){
+  deck = newDeck; S = deck.styling || {};
+  const cv = S.canvas || {};
+  document.body.style.background = cv.background || "#FCFBF7";
+  document.body.style.fontFamily = cv.fontFamily || "Helvetica,Arial,sans-serif";
+  document.body.style.color = cv.ink || "#1D1F23";
+  $("#brand").innerHTML = `<b>${deck.meta.title}</b> · ${deck.meta.event||""} · ${deck.meta.date||""}`;
+  $("#brand").style.color = cv.lgray || "#9BA0A8";
+  $("#brand").querySelector("b").style.color = cv.ink || "#1D1F23";
+  $("#caption .num").style.color = cv.lgray||"#9BA0A8";
+  $("#caption .cc").style.color = cv.gray||"#62666F";
+
+  world.querySelectorAll(".node").forEach(n=>n.remove());
+  svg.innerHTML = "";
+  nodes = {}; edgeObjs = []; scenes = []; posSnapshot = {};
+  $("#dots").innerHTML = "";
+
+  deck.slides.forEach(sl=>{
+    sl.layout = sl.layout || {};
+    posSnapshot[sl.id] = {};
+    sl.nodes.forEach((nd,idx)=>{
+      if(!nd.pos){ const a=idx/sl.nodes.length*6.283; nd.pos=[Math.round(Math.cos(a)*200), Math.round(Math.sin(a)*160)]; }
+      posSnapshot[sl.id][nd.id] = [...nd.pos];
+      const st = styleFor(nd.kind, S.nodeStyles||{});
+      const el = document.createElement("div");
+      el.className = "node";
+      const isRing = (nd.kind||"").includes("ring");
+      if(isRing){ el.classList.add("is-ring"); el.style.width = el.style.height = (nd.r*2)+"px"; }
+      else el.style.width = (nd.w||180)+"px";
+      el.style.background = st.background ?? "#fff";
+      el.style.border = `${st.borderWidth??1.5}px solid ${st.borderColor??"#E7E3D9"}`;
+      el.style.borderRadius = (st.radius??12)+"px";
+      el.style.padding = isRing ? "0 18px" : (st.padding??"10px 14px 11px");
+      el.style.textAlign = st.align || "left";
+      if(st.shadow !== false && !isRing) el.style.boxShadow = "0 1px 3px rgba(90,80,60,.07)";
+      let h = "";
+      if(nd.title) h += `<div class="t" style="color:${st.titleColor??"#1D1F23"};font-size:${st.titleSize??15}px">${nd.title}</div>`;
+      if(nd.sub)   h += `<div class="s" style="color:${st.subColor??"#62666F"}">${nd.sub}</div>`;
+      if(nd.body)  h += `<div class="x" style="color:${st.bodyColor??"#9BA0A8"}">${nd.body}</div>`;
+      if(nd.image && deck.assets && deck.assets[nd.image]) h += deck.assets[nd.image];
+      el.innerHTML = h;
+      world.appendChild(el);
+      const w = el.offsetWidth, hh = el.offsetHeight;
+      nodes[nd.id] = {
+        id:nd.id, def:nd, slide:sl, el, w, h:hh,
+        r: nd.r||0, isRing,
+        phase: nd.floatPhase!=null ? nd.floatPhase : (idx*1.83)%6.283,
+        px:0, py:0,          // eased push displacement
+        tx:0, ty:0,          // temporary drag offset (view mode)
+        fx:0, fy:0,          // current rendered world pos (filled per frame)
+      };
+      attachNodePointer(nodes[nd.id]);
+    });
+  });
+
+  const mkEdge = (e)=>{
+    const st = styleFor(e.kind||"default", S.edgeStyles||{});
+    const p = document.createElementNS("http://www.w3.org/2000/svg","path");
+    p.setAttribute("class","edge");
+    p.style.stroke = st.stroke ?? "#D9D4C7";
+    p.style.strokeWidth = st.width ?? 1.6;
+    if(st.dash) p.style.strokeDasharray = st.dash;
+    svg.insertBefore(p, svg.firstChild);
+    let lab = null;
+    if(e.label){
+      lab = document.createElementNS("http://www.w3.org/2000/svg","text");
+      lab.setAttribute("class","elabel");
+      lab.textContent = e.label;
+      lab.style.fill = st.labelColor ?? "#9BA0A8";
+      lab.style.stroke = (S.canvas&&S.canvas.background)||"#FCFBF7";
+      svg.appendChild(lab);
+    }
+    edgeObjs.push({e, kind:e.kind||"default", a:e.from, b:e.to, p, lab});
+  };
+  deck.slides.forEach(sl=> (sl.edges||[]).forEach(mkEdge));
+  (deck.connections||[]).forEach(mkEdge);
+
+  // a slide's scene = its own nodes + any nodes it `include`s from other slides (shared nodes)
+  scenes = deck.slides.map(sl=>({slide:sl, title:sl.title, cap:sl.caption,
+    ids:[...sl.nodes.map(n=>n.id), ...((sl.include||[]).filter(id=>nodes[id]))]}));
+  const ov = (deck.meta.overview)||{};
+  scenes.push({slide:null, title:ov.title||"Overview", cap:ov.caption||"", ids:Object.keys(nodes), overview:true});
+  scenes.forEach((sc,i)=>{
+    const d = document.createElement("i");
+    d.addEventListener("click",()=>go(i));
+    $("#dots").appendChild(d);
+  });
+  // size the world (and edge canvas) to the content, not a fixed giant layer —
+  // oversized composited layers can render blank on mobile WebKit
+  let mx=0, my=0;
+  Object.values(nodes).forEach(n=>{
+    mx=Math.max(mx, homeX(n)+(n.isRing?n.r:n.w/2));
+    my=Math.max(my, homeY(n)+(n.isRing?n.r:n.h/2));
+  });
+  world.style.width=(mx+300)+"px"; world.style.height=(my+300)+"px";
+  svg.setAttribute("width",mx+300); svg.setAttribute("height",my+300);
+  const bm=$("#bootmsg"); if(bm) bm.style.display="none";
+  go(0);
+}
+
+/* ---------------- positions ---------------- */
+function homeX(n){ return n.slide.anchor[0] + n.def.pos[0]; }
+function homeY(n){ return n.slide.anchor[1] + n.def.pos[1]; }
+
+/* ---------------- scenes ---------------- */
+let actSet = new Set();
+function highlight(ids, ov){
+  actSet = new Set(ids);
+  Object.values(nodes).forEach(n=> n.el.classList.toggle("on", actSet.has(n.id)));
+  edgeObjs.forEach(eo=>{
+    const both = actSet.has(eo.a) && actSet.has(eo.b);
+    const one = actSet.has(eo.a) || actSet.has(eo.b);
+    const isSpine = eo.kind==="spine", isCross = eo.kind==="cross";
+    const on = ov ? !isSpine : both;
+    eo.p.classList.toggle("on", on);
+    eo.p.classList.toggle("half", !on && (ov ? isSpine : (one && isCross)));
+    if(eo.lab) eo.lab.classList.toggle("on", ov ? isCross : both);
+  });
+}
+function applyScene(){
+  const sc = scenes[cur];
+  highlight(sc.ids, !!sc.overview);
+  $("#caption .num").textContent = String(cur+1).padStart(2,"0")+" / "+scenes.length;
+  $("#caption .tt").textContent = sc.title;
+  $("#caption .cc").textContent = sc.cap;
+  [...$("#dots").children].forEach((d,k)=>d.classList.toggle("on",k===cur));
+  refreshPanel();
+}
+
+function computeFit(){
+  const sc = scenes[cur];
+  const L = layoutOf(sc.slide);
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  sc.ids.forEach(id=>{
+    const n=nodes[id];
+    const hw = n.isRing? n.r : n.w/2, hh = n.isRing? n.r : n.h/2;
+    x0=Math.min(x0,homeX(n)-hw); y0=Math.min(y0,homeY(n)-hh);
+    x1=Math.max(x1,homeX(n)+hw); y1=Math.max(y1,homeY(n)+hh);
+  });
+  if(sc.overview){
+    // the finale replays every slide's window — keep the moving border fully in view
+    for(let i=0;i<deck.slides.length;i++){
+      const w = slideWindow(i);
+      x0=Math.min(x0,w.cx-w.rw); y0=Math.min(y0,w.cy-w.rh);
+      x1=Math.max(x1,w.cx+w.rw); y1=Math.max(y1,w.cy+w.rh);
+    }
+  }
+  const pad = L.fitMargin ?? 150;
+  const vw = innerWidth-(editMode?270:0), vh = innerHeight;
+  const s = Math.min(vw/(x1-x0+pad*2), vh/(y1-y0+pad*2+80), L.zoomMax ?? 1.15);
+  const cx = (x0+x1)/2, cy = (y0+y1)/2 + 14;
+  camTarget = {x:cx, y:cy, s};
+  pushCtx = sc.overview ? null : {
+    cx, cy,
+    rw: vw/2/s, rh: vh/2/s,
+    margin: L.pushMargin ?? 160,
+  };
+}
+
+function go(i){
+  cur = (i+scenes.length)%scenes.length;
+  freeCam = false;
+  applyScene();
+  computeFit();
+  if(scenes[cur].overview) startTour(); else stopTour();
+}
+
+/* ---------------- finale tour: the window itself replays the slides ----------------
+   Camera stays at the zoomed-out fit; a visible border rect tweens between each
+   slide's content window (same fit math), and highlight + push-out follow it. */
+let tour = null, tourRect = null;
+function slideWindow(i){
+  const sc = scenes[i], L = layoutOf(sc.slide);
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  sc.ids.forEach(id=>{
+    const n=nodes[id];
+    const hw = n.isRing? n.r : n.w/2, hh = n.isRing? n.r : n.h/2;
+    x0=Math.min(x0,homeX(n)-hw); y0=Math.min(y0,homeY(n)-hh);
+    x1=Math.max(x1,homeX(n)+hw); y1=Math.max(y1,homeY(n)+hh);
+  });
+  const pad = L.fitMargin ?? 150;
+  const vw = innerWidth-(editMode?270:0), vh = innerHeight;
+  const s = Math.min(vw/(x1-x0+pad*2), vh/(y1-y0+pad*2+80), L.zoomMax ?? 1.15);
+  return {cx:(x0+x1)/2, cy:(y0+y1)/2+14, rw:vw/2/s, rh:vh/2/s, margin:L.pushMargin ?? 160};
+}
+function easeIO(t){ return t<.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2; }
+function startTour(){
+  if(!tourRect){
+    tourRect = document.createElementNS("http://www.w3.org/2000/svg","rect");
+    tourRect.style.fill = "none";
+    tourRect.style.stroke = "#574CE3";
+    tourRect.style.transition = "opacity .5s ease";
+  }
+  svg.appendChild(tourRect);
+  tourRect.style.opacity = .85;
+  tour = {i:-1, phase:"pause", until:performance.now()+500, cur:null};
+}
+function stopTour(){
+  if(!tour) return;
+  tour = null;
+  if(tourRect) tourRect.style.opacity = 0;
+}
+function tourStep(now){
+  if(now >= tour.until){
+    if(tour.phase === "pause"){
+      tour.i = (tour.i+1) % deck.slides.length;
+      tour.to = slideWindow(tour.i);
+      tour.from = tour.cur || tour.to;
+      tour.phase = "move"; tour.t0 = now; tour.until = now + 700;
+      // same highlight + push-out logic as visiting the slide — the box is the window
+      highlight(scenes[tour.i].ids, false);
+      pushCtx = {cx:tour.to.cx, cy:tour.to.cy, rw:tour.to.rw, rh:tour.to.rh, margin:tour.to.margin};
+      $("#caption .cc").textContent = "replaying — " + scenes[tour.i].title;
+    } else {
+      tour.phase = "pause"; tour.until = now + 500;
+    }
+  }
+  if(!tour.to) return;   // waiting for the first step
+  let r;
+  if(tour.phase === "move"){
+    const k = easeIO(Math.min(1,(now-tour.t0)/700));
+    r = { cx: tour.from.cx+(tour.to.cx-tour.from.cx)*k,
+          cy: tour.from.cy+(tour.to.cy-tour.from.cy)*k,
+          rw: tour.from.rw+(tour.to.rw-tour.from.rw)*k,
+          rh: tour.from.rh+(tour.to.rh-tour.from.rh)*k };
+  } else r = tour.to;
+  tour.cur = r;
+  tourRect.setAttribute("x", r.cx-r.rw); tourRect.setAttribute("y", r.cy-r.rh);
+  tourRect.setAttribute("width", r.rw*2); tourRect.setAttribute("height", r.rh*2);
+  tourRect.setAttribute("rx", 16/cam.s);
+  tourRect.style.strokeWidth = 2.4/cam.s;
+}
+function travelTo(id){
+  if(new Set(scenes[cur].ids).has(id)) return;
+  const i = deck.slides.findIndex(sl=>sl.nodes.some(n=>n.id===id));
+  if(i>=0) go(i);
+}
+
+/* ---------------- push-out targets ---------------- */
+function pushTarget(n){
+  if(!pushCtx) return [0,0];
+  if(actSet.has(n.id)) return [0,0];
+  const hx=homeX(n), hy=homeY(n);
+  let dx=hx-pushCtx.cx, dy=hy-pushCtx.cy;
+  if(!dx && !dy){ dx=0; dy=1; }
+  const hw = n.isRing? n.r : n.w/2, hh = n.isRing? n.r : n.h/2;
+  const RW = pushCtx.rw + hw + pushCtx.margin;
+  const RH = pushCtx.rh + hh + pushCtx.margin;
+  const m = Math.max(Math.abs(dx)/RW, Math.abs(dy)/RH);
+  if(m >= 1) return [0,0];                 // already outside the window
+  const k = 1/m;                           // scale ray until it exits the rect
+  return [dx*(k-1), dy*(k-1)];
+}
+
+/* ---------------- render loop ---------------- */
+function frame(t){
+  if(tour) tourStep(t);
+  // camera
+  if(camTarget && !freeCam){
+    cam.x += (camTarget.x-cam.x)*.065;
+    cam.y += (camTarget.y-cam.y)*.065;
+    cam.s += (camTarget.s-cam.s)*.065;
+  }
+  const vw=innerWidth-(editMode?270:0);
+  world.style.transform = `translate(${vw/2-cam.x*cam.s}px, ${innerHeight/2-cam.y*cam.s}px) scale(${cam.s})`;
+
+  // nodes: home + float + eased push + temp drag
+  Object.values(nodes).forEach(n=>{
+    const L = layoutOf(n.slide);
+    const amp = L.floatAmp ?? 3.5;
+    const dxf = Math.sin(t*.00055+n.phase)*amp;
+    const dyf = Math.cos(t*.00045+n.phase*1.4)*amp;
+    const [ptx,pty] = pushTarget(n);
+    n.px += (ptx-n.px)*.06;
+    n.py += (pty-n.py)*.06;
+    if(!n.dragging){ n.tx*=.88; n.ty*=.88; }   // spring back after view-mode drag
+    n.fx = homeX(n)+dxf+n.px+n.tx;
+    n.fy = homeY(n)+dyf+n.py+n.ty;
+    n.el.style.transform = `translate(${n.fx-n.w/2}px, ${n.fy-n.h/2}px)`;
+  });
+
+  // edges
+  edgeObjs.forEach(eo=>{
+    const A=nodes[eo.a], B=nodes[eo.b];
+    if(!A||!B) return;
+    const [ax,ay]=borderPoint(A,B.fx,B.fy);
+    const [bx,by]=borderPoint(B,A.fx,A.fy);
+    let d;
+    const curve = eo.e.curve;
+    if(curve){
+      const mx=(ax+bx)/2, my=(ay+by)/2;
+      let px=-(by-ay), py=(bx-ax);
+      const l=Math.hypot(px,py)||1;
+      d=`M ${ax} ${ay} Q ${mx+px/l*curve} ${my+py/l*curve} ${bx} ${by}`;
+    } else d=`M ${ax} ${ay} L ${bx} ${by}`;
+    eo.p.setAttribute("d",d);
+    if(eo.lab){
+      eo.lab.setAttribute("x",(ax+bx)/2);
+      eo.lab.setAttribute("y",(ay+by)/2-8-(curve?curve*.42:0));
+    }
+  });
+  requestAnimationFrame(frame);
+}
+function borderPoint(n, tx, ty){
+  const dx=tx-n.fx, dy=ty-n.fy;
+  if(!dx && !dy) return [n.fx,n.fy];
+  if(n.isRing){ const d=Math.hypot(dx,dy); return [n.fx+dx/d*n.r, n.fy+dy/d*n.r]; }
+  const hw=n.w/2+6, hh=n.h/2+6;
+  const s=Math.min(dx?hw/Math.abs(dx):1e9, dy?hh/Math.abs(dy):1e9, 1);
+  return [n.fx+dx*s, n.fy+dy*s];
+}
+
+/* ---------------- interaction ---------------- */
+let dragging=null, panning=null;
+function attachNodePointer(n){
+  n.el.addEventListener("pointerdown", ev=>{
+    ev.stopPropagation();
+    dragging={n, sx:ev.clientX, sy:ev.clientY, ox:[...n.def.pos], otx:n.tx, oty:n.ty, moved:false};
+    n.dragging=true;
+    try{ n.el.setPointerCapture(ev.pointerId); }catch(_){}
+  });
+  n.el.addEventListener("pointermove", ev=>{
+    if(!dragging || dragging.n!==n) return;
+    const dx=(ev.clientX-dragging.sx)/cam.s, dy=(ev.clientY-dragging.sy)/cam.s;
+    if(Math.abs(dx)+Math.abs(dy)>4) dragging.moved=true;
+    if(!dragging.moved) return;
+    if(editMode){
+      n.def.pos[0]=dragging.ox[0]+dx;
+      n.def.pos[1]=dragging.ox[1]+dy;
+    } else {
+      n.tx=dragging.otx+dx; n.ty=dragging.oty+dy;
+    }
+  });
+  n.el.addEventListener("pointerup", ()=>{
+    if(!dragging || dragging.n!==n) return;
+    n.dragging=false;
+    if(!dragging.moved) travelTo(n.id);
+    else if(editMode) computeFit();          // bounds may have changed
+    dragging=null;
+  });
+}
+const touches = new Map();   // active pointers on the background (pan + pinch)
+let pinch = null;
+vp.addEventListener("pointerdown", e=>{
+  touches.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if(touches.size===1){
+    panning={px:e.clientX,py:e.clientY,cx:cam.x,cy:cam.y};
+  } else if(touches.size===2){
+    panning=null;
+    const [a,b]=[...touches.values()];
+    const mid={x:(a.x+b.x)/2, y:(a.y+b.y)/2};
+    pinch={ d0:Math.hypot(a.x-b.x,a.y-b.y)||1, s0:cam.s,
+            wx:cam.x+(mid.x-innerWidth/2)/cam.s, wy:cam.y+(mid.y-innerHeight/2)/cam.s };
+  }
+  vp.classList.add("dragging");
+  try{ vp.setPointerCapture(e.pointerId); }catch(_){}
+});
+vp.addEventListener("pointermove", e=>{
+  if(!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if(pinch && touches.size>=2){
+    freeCam=true;
+    const [a,b]=[...touches.values()];
+    const mid={x:(a.x+b.x)/2, y:(a.y+b.y)/2};
+    const d=Math.hypot(a.x-b.x,a.y-b.y)||1;
+    cam.s=Math.min(2.4, Math.max(.12, pinch.s0*d/pinch.d0));
+    cam.x=pinch.wx-(mid.x-innerWidth/2)/cam.s;
+    cam.y=pinch.wy-(mid.y-innerHeight/2)/cam.s;
+    return;
+  }
+  if(!panning) return;
+  const dx=e.clientX-panning.px, dy=e.clientY-panning.py;
+  if(Math.abs(dx)+Math.abs(dy)>3) freeCam=true;
+  if(freeCam){ cam.x=panning.cx-dx/cam.s; cam.y=panning.cy-dy/cam.s; }
+});
+function endTouch(e){
+  touches.delete(e.pointerId);
+  if(touches.size<2) pinch=null;
+  if(touches.size===1){
+    const [a]=[...touches.values()];
+    panning={px:a.x,py:a.y,cx:cam.x,cy:cam.y};
+  } else if(touches.size===0){
+    panning=null; vp.classList.remove("dragging");
+  }
+}
+vp.addEventListener("pointerup", endTouch);
+vp.addEventListener("pointercancel", endTouch);
+vp.addEventListener("wheel", e=>{
+  e.preventDefault(); freeCam=true;
+  const k=Math.exp(-e.deltaY*.0012);
+  const wx0=cam.x+(e.clientX-innerWidth/2)/cam.s, wy0=cam.y+(e.clientY-innerHeight/2)/cam.s;
+  cam.s=Math.min(2.4, Math.max(.12, cam.s*k));
+  cam.x=wx0-(e.clientX-innerWidth/2)/cam.s;
+  cam.y=wy0-(e.clientY-innerHeight/2)/cam.s;
+},{passive:false});
+
+$("#nextbtn").onclick=()=>go(cur+1);
+$("#prevbtn").onclick=()=>go(cur-1);
+$("#ovbtn").onclick=()=>go(scenes.length-1);
+$("#editbtn").onclick=toggleEdit;
+addEventListener("keydown", e=>{
+  if(e.target.tagName==="TEXTAREA"||e.target.tagName==="INPUT"||e.target.tagName==="SELECT") return;
+  if(e.key==="ArrowRight"||e.key===" ") go(cur+1);
+  else if(e.key==="ArrowLeft") go(cur-1);
+  else if(e.key.toLowerCase()==="o") go(scenes.length-1);
+  else if(e.key.toLowerCase()==="e") toggleEdit();
+});
+addEventListener("resize", ()=>{ if(!freeCam) computeFit(); });
+
+/* ---------------- edit panel ---------------- */
+function toggleEdit(){
+  editMode=!editMode;
+  $("#panel").classList.toggle("open", editMode);
+  $("#editbtn").textContent = editMode?"done":"edit";
+  refreshPanel(); computeFit();
+}
+function curSlide(){ return scenes[cur].slide; }
+function refreshPanel(){
+  if(!editMode) return;
+  const sl = curSlide();
+  $("#panel .slidename").textContent = sl? `slide: ${sl.id}` : "overview — pick a slide to edit";
+  const holder = $("#sliders");
+  holder.innerHTML = "";
+  if(!sl) return;
+  const L = layoutOf(sl);
+  LAYOUT_SCHEMA.forEach(([key,min,max,step,label])=>{
+    const row=document.createElement("div"); row.className="row";
+    row.innerHTML=`<label>${label} <b>${L[key]}</b></label>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${L[key]}">`;
+    const inp=row.querySelector("input"), val=row.querySelector("b");
+    inp.addEventListener("input",()=>{
+      sl.layout[key]=parseFloat(inp.value);
+      val.textContent=inp.value;
+      computeFit();
+    });
+    holder.appendChild(row);
+  });
+}
+$("#undolayout").onclick=()=>{
+  const sl=curSlide(); if(!sl) return;
+  sl.nodes.forEach(nd=>{ if(posSnapshot[sl.id][nd.id]) nd.pos=[...posSnapshot[sl.id][nd.id]]; });
+  computeFit();
+  toast("layout restored on "+sl.id);
+};
+function deckJSON(){
+  // round positions for a clean export
+  deck.slides.forEach(sl=>sl.nodes.forEach(nd=>{ if(nd.pos) nd.pos=[Math.round(nd.pos[0]), Math.round(nd.pos[1])]; }));
+  return JSON.stringify(deck, null, 2);
+}
+$("#copyjson").onclick=async ()=>{
+  try{ await navigator.clipboard.writeText(deckJSON()); toast("deck JSON copied"); }
+  catch(e){ openModal(); }
+};
+$("#viewjson").onclick=openModal;
+function openModal(){ $("#jsonmodal").classList.add("open"); $("#jsonmodal textarea").value=deckJSON(); }
+$("#closejson").onclick=()=>$("#jsonmodal").classList.remove("open");
+$("#applyjson").onclick=()=>{
+  try{ boot(JSON.parse($("#jsonmodal textarea").value)); $("#jsonmodal").classList.remove("open"); toast("deck loaded"); }
+  catch(err){ toast("invalid JSON: "+err.message); }
+};
+$("#loadjson").onclick=()=>$("#filein").click();
+$("#filein").addEventListener("change", e=>{
+  const f=e.target.files[0]; if(!f) return;
+  f.text().then(txt=>{ boot(JSON.parse(txt)); toast("loaded "+f.name); }).catch(()=>toast("invalid JSON"));
+});
+addEventListener("dragover", e=>e.preventDefault());
+addEventListener("drop", e=>{
+  e.preventDefault();
+  const f=e.dataTransfer.files[0]; if(!f) return;
+  f.text().then(txt=>{ boot(JSON.parse(txt)); toast("loaded "+f.name); }).catch(()=>toast("invalid JSON"));
+});
+let toastTimer=null;
+function toast(msg){
+  const t=$("#toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove("show"),2200);
+}
+
+// deck embedded directly in the executing script — separate JSON script tags
+// get stripped by some HTML-preview sanitizers, which left the page blank
+const EMBEDDED_DECK = {
+  "meta": {
+    "title": "Graphs are awesome",
+    "author": "Yohei Nakajima",
+    "event": "GraphCon",
+    "date": "July 25, 2026",
+    "overview": {
+      "title": "One graph",
+      "caption": "zoomed all the way out — the window replays every slide, and the nodes push in and out just like they did"
+    }
+  },
+  "styling": {
+    "canvas": {
+      "background": "#FCFBF7",
+      "fontFamily": "Helvetica, Arial, sans-serif",
+      "monoFamily": "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
+      "ink": "#1D1F23",
+      "gray": "#62666F",
+      "lgray": "#9BA0A8",
+      "hair": "#E7E3D9"
+    },
+    "nodeStyles": {
+      "default": {
+        "background": "#FFFFFF",
+        "borderColor": "#E7E3D9",
+        "borderWidth": 1.5,
+        "titleColor": "#1D1F23",
+        "titleSize": 16,
+        "subColor": "#62666F",
+        "bodyColor": "#9BA0A8",
+        "radius": 12,
+        "padding": "10px 14px 11px",
+        "shadow": true
+      },
+      "indigo": {
+        "borderColor": "#574CE3",
+        "titleColor": "#574CE3"
+      },
+      "green": {
+        "borderColor": "#5E9430",
+        "titleColor": "#5E9430"
+      },
+      "tan": {
+        "borderColor": "#A87B3E",
+        "titleColor": "#A87B3E"
+      },
+      "ink": {
+        "titleColor": "#1D1F23"
+      },
+      "hub": {
+        "titleSize": 22,
+        "radius": 16,
+        "padding": "15px 21px"
+      },
+      "mega": {
+        "titleSize": 30,
+        "padding": "18px 26px"
+      },
+      "tiny": {
+        "titleSize": 13,
+        "radius": 999,
+        "padding": "7px 14px"
+      },
+      "circle": {
+        "radius": 999,
+        "padding": "30px 22px",
+        "align": "center"
+      },
+      "ring": {
+        "background": "transparent",
+        "borderWidth": 2,
+        "align": "center",
+        "shadow": false,
+        "radius": 999
+      },
+      "img": {
+        "padding": "12px 12px 9px"
+      },
+      "ghost": {
+        "background": "transparent",
+        "borderWidth": 0,
+        "shadow": false,
+        "align": "center"
+      }
+    },
+    "edgeStyles": {
+      "default": {
+        "stroke": "#D9D4C7",
+        "width": 1.6,
+        "labelColor": "#9BA0A8"
+      },
+      "cross": {
+        "stroke": "#B9B2E8",
+        "width": 1.6,
+        "dash": "5 5",
+        "labelColor": "#8F86E8"
+      },
+      "cycle": {
+        "stroke": "#9CC46F",
+        "width": 1.7,
+        "labelColor": "#5E9430"
+      },
+      "chain": {
+        "stroke": "#D8C4A8",
+        "width": 1.7,
+        "labelColor": "#A87B3E"
+      },
+      "spine": {
+        "stroke": "#E3DED2",
+        "width": 1.2,
+        "labelColor": "#C6C1B4"
+      },
+      "tangent": {
+        "stroke": "transparent",
+        "width": 0
+      },
+      "moves": {
+        "stroke": "#8F86E8",
+        "width": 2,
+        "dash": "7 5",
+        "labelColor": "#574CE3"
+      },
+      "loopi": {
+        "stroke": "#A79FEE",
+        "width": 1.6,
+        "labelColor": "#574CE3"
+      },
+      "loopg": {
+        "stroke": "#9CC46F",
+        "width": 1.6,
+        "labelColor": "#5E9430"
+      },
+      "loopt": {
+        "stroke": "#D8C4A8",
+        "width": 1.6,
+        "labelColor": "#A87B3E"
+      }
+    }
+  },
+  "assets": {
+    "order-graph": "<svg width='224' height='128' viewBox='0 0 228 132'><g stroke='#A87B3E' stroke-width='2'><line x1='22' y1='66' x2='70' y2='66'/><line x1='70' y1='66' x2='114' y2='30'/><line x1='70' y1='66' x2='114' y2='104'/><line x1='114' y1='30' x2='158' y2='12'/><line x1='114' y1='30' x2='152' y2='50'/><line x1='114' y1='104' x2='174' y2='82'/><line x1='158' y1='12' x2='174' y2='82'/><\/g><g fill='#6FA83C'><circle cx='22' cy='66' r='6'/><circle cx='70' cy='66' r='6'/><circle cx='114' cy='30' r='6'/><circle cx='114' cy='104' r='6'/><circle cx='158' cy='12' r='6'/><circle cx='152' cy='50' r='6'/><circle cx='174' cy='82' r='6'/><\/g><g font-family='Menlo,Consolas,monospace' font-size='9' fill='#9BA0A8' text-anchor='middle'><text x='22' y='52'>a<\/text><text x='70' y='52'>b<\/text><text x='114' y='16'>c<\/text><text x='114' y='124'>d<\/text><text x='158' y='34'>e<\/text><text x='152' y='70'>f<\/text><text x='186' y='98'>g<\/text><\/g><\/svg>",
+    "chaos-lists": "<div class='minilists'><div class='col'><div class='h'>nodes<\/div><div><span class='d'>●<\/span> a<\/div><div><span class='d'>●<\/span> b<\/div><div><span class='d'>●<\/span> c<\/div><div><span class='d'>●<\/span> d<\/div><div><span class='d'>●<\/span> e<\/div><div><span class='d'>●<\/span> f<\/div><div><span class='d'>●<\/span> g<\/div><\/div><div class='col'><div class='h'>edges<\/div><div><span class='e'>—<\/span> a → b<\/div><div><span class='e'>—<\/span> b → c<\/div><div><span class='e'>—<\/span> b → d<\/div><div><span class='e'>—<\/span> c → e<\/div><div><span class='e'>—<\/span> c → f<\/div><div><span class='e'>—<\/span> d → g<\/div><div><span class='e'>—<\/span> e → g<\/div><\/div><\/div>"
+  },
+  "layoutDefaults": {
+    "floatAmp": 3.5,
+    "fitMargin": 150,
+    "pushMargin": 180,
+    "zoomMax": 1.15
+  },
+  "slides": [
+    {
+      "id": "title",
+      "title": "Graphs are awesome",
+      "caption": "because relationships are where the meaning lives — a talk told as the thing it is about",
+      "anchor": [
+        1689,
+        1238
+      ],
+      "layout": {
+        "fitMargin": 210,
+        "zoomMax": 1.0
+      },
+      "nodes": [
+        {
+          "id": "t_hub",
+          "kind": "hub mega ink",
+          "title": "Graphs are awesome",
+          "sub": "because relationships are where the meaning lives",
+          "w": 300,
+          "pos": [
+            -16,
+            -4
+          ]
+        },
+        {
+          "id": "t_speaker",
+          "kind": "tiny indigo",
+          "title": "Yohei Nakajima",
+          "w": 150,
+          "pos": [
+            -323,
+            192
+          ]
+        },
+        {
+          "id": "t_conf",
+          "kind": "tiny ink",
+          "title": "GraphCon · Jul 25 2026",
+          "w": 175,
+          "pos": [
+            261,
+            173
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "t_hub",
+          "to": "t_speaker",
+          "label": ":presented_by"
+        },
+        {
+          "from": "t_hub",
+          "to": "t_conf",
+          "label": ":at"
+        }
+      ]
+    },
+    {
+      "id": "order-chaos",
+      "title": "Order vs chaos",
+      "caption": "the same seven nodes and seven edges — drawn, the structure is obvious; listed, it is invisible",
+      "anchor": [
+        1577,
+        869
+      ],
+      "nodes": [
+        {
+          "id": "oc_data",
+          "kind": "ink",
+          "title": "same data",
+          "sub": "seven nodes · seven edges",
+          "w": 165,
+          "pos": [
+            -12,
+            -160
+          ]
+        },
+        {
+          "id": "oc_order",
+          "kind": "img green",
+          "title": "Order",
+          "sub": "drawn as a graph — the topology is visible",
+          "image": "order-graph",
+          "w": 260,
+          "pos": [
+            -230,
+            79
+          ]
+        },
+        {
+          "id": "oc_chaos",
+          "kind": "img tan",
+          "title": "Chaos",
+          "sub": "stored as tables — the topology is hidden",
+          "image": "chaos-lists",
+          "w": 245,
+          "pos": [
+            225,
+            82
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "oc_data",
+          "to": "oc_order",
+          "label": ":drawn_as"
+        },
+        {
+          "from": "oc_data",
+          "to": "oc_chaos",
+          "label": ":stored_as"
+        }
+      ]
+    },
+    {
+      "id": "everything",
+      "title": "Everything is a graph",
+      "caption": "pick any domain and the entities are already pointing at each other — and the domains point at each other too",
+      "anchor": [
+        2128,
+        811
+      ],
+      "nodes": [
+        {
+          "id": "ev_hub",
+          "kind": "hub indigo",
+          "title": "Everything is a graph",
+          "w": 230,
+          "pos": [
+            -25,
+            200
+          ]
+        },
+        {
+          "id": "ev_social",
+          "kind": "indigo",
+          "title": "Social",
+          "sub": "people · trust · influence",
+          "body": "(alice)-[:follows]->(bob)",
+          "w": 190,
+          "pos": [
+            -463,
+            -145
+          ]
+        },
+        {
+          "id": "ev_business",
+          "kind": "indigo",
+          "title": "Business",
+          "sub": "companies · deals · funds",
+          "body": "(fund)-[:invested]->(acme)",
+          "w": 195,
+          "pos": [
+            -245,
+            -210
+          ]
+        },
+        {
+          "id": "ev_objects",
+          "kind": "indigo",
+          "title": "Objects",
+          "sub": "parts · dependencies",
+          "body": "(wheel)-[:part_of]->(car)",
+          "w": 190,
+          "pos": [
+            -5,
+            -230
+          ]
+        },
+        {
+          "id": "ev_places",
+          "kind": "indigo",
+          "title": "Places",
+          "sub": "locations · routes",
+          "body": "(nrt)-[:flight]->(sea)",
+          "w": 180,
+          "pos": [
+            235,
+            -190
+          ]
+        },
+        {
+          "id": "ev_beliefs",
+          "kind": "indigo",
+          "title": "Beliefs",
+          "sub": "claims · evidence · revision",
+          "body": "(claim)-[:based_on]->(src)",
+          "w": 200,
+          "pos": [
+            512,
+            -82
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "ev_hub",
+          "to": "ev_social"
+        },
+        {
+          "from": "ev_hub",
+          "to": "ev_business"
+        },
+        {
+          "from": "ev_hub",
+          "to": "ev_objects"
+        },
+        {
+          "from": "ev_hub",
+          "to": "ev_places"
+        },
+        {
+          "from": "ev_hub",
+          "to": "ev_beliefs"
+        },
+        {
+          "from": "ev_business",
+          "to": "ev_social",
+          "label": ":founders_are_people"
+        },
+        {
+          "from": "ev_business",
+          "to": "ev_places",
+          "label": ":hq_at"
+        },
+        {
+          "from": "ev_beliefs",
+          "to": "ev_social",
+          "label": ":held_by"
+        }
+      ]
+    },
+    {
+      "id": "rows-edges",
+      "title": "Rows and edges",
+      "caption": "the same node, two views — rows are easy to inspect one by one; edges carry the relationships",
+      "anchor": [
+        1577,
+        955
+      ],
+      "include": [
+        "oc_data"
+      ],
+      "nodes": [
+        {
+          "id": "re_edges",
+          "kind": "green",
+          "title": "Edges",
+          "sub": "easy to reason about",
+          "body": "uses · paid_by · mentions · owns · limits",
+          "w": 195,
+          "pos": [
+            -295,
+            106
+          ]
+        },
+        {
+          "id": "re_rows",
+          "kind": "tan",
+          "title": "Rows",
+          "sub": "easy to inspect, one by one",
+          "body": "customer · invoice · ticket · team · policy",
+          "w": 200,
+          "pos": [
+            295,
+            103
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "oc_data",
+          "to": "re_edges",
+          "label": ":as_edges"
+        },
+        {
+          "from": "oc_data",
+          "to": "re_rows",
+          "label": ":as_rows"
+        }
+      ]
+    },
+    {
+      "id": "timeline",
+      "title": "Agents got graph-shaped in public",
+      "caption": "2022 – 2025 · each pressure point forced one more graph into the stack — remember these, they come back",
+      "anchor": [
+        2004,
+        1436
+      ],
+      "layout": {
+        "fitMargin": 120
+      },
+      "nodes": [
+        {
+          "id": "tl_hub",
+          "kind": "hub ink",
+          "title": "Agents got graph-shaped",
+          "sub": "in public · 2022 – 2025",
+          "w": 215,
+          "pos": [
+            -1170,
+            -95
+          ]
+        },
+        {
+          "id": "tl_react",
+          "kind": "indigo",
+          "title": "ReAct",
+          "sub": "Oct 2022",
+          "body": "interleave reasoning + acting — the base loop",
+          "w": 165,
+          "pos": [
+            -850,
+            50
+          ]
+        },
+        {
+          "id": "tl_baby",
+          "kind": "green",
+          "title": "BabyAGI / AutoGPT / ToT",
+          "sub": "Mar – May 2023",
+          "body": "task queues + reasoning trees — (yohei)-[:shipped]->(babyagi)",
+          "w": 205,
+          "pos": [
+            -603,
+            -108
+          ]
+        },
+        {
+          "id": "tl_fc",
+          "kind": "indigo",
+          "title": "Function calling",
+          "sub": "Jun 2023",
+          "body": "structured tool edges from the model",
+          "w": 165,
+          "pos": [
+            -350,
+            60
+          ]
+        },
+        {
+          "id": "tl_ag",
+          "kind": "green",
+          "title": "AutoGen / Assistants API",
+          "sub": "Sep – Nov 2023",
+          "body": "agent teams + threads as state",
+          "w": 190,
+          "pos": [
+            -138,
+            -90
+          ]
+        },
+        {
+          "id": "tl_lg",
+          "kind": "indigo",
+          "title": "LangGraph",
+          "sub": "Jan 2024",
+          "body": "explicit nodes, edges, cycles, checkpoints",
+          "w": 175,
+          "pos": [
+            149,
+            57
+          ]
+        },
+        {
+          "id": "tl_gr",
+          "kind": "green",
+          "title": "Microsoft GraphRAG",
+          "sub": "Jul 2024",
+          "body": "retrieval over an entity graph + community summaries",
+          "w": 190,
+          "pos": [
+            408,
+            -60
+          ]
+        },
+        {
+          "id": "tl_mcp",
+          "kind": "indigo",
+          "title": "MCP",
+          "sub": "Nov 2024",
+          "body": "open standard — tools + resources as a context graph",
+          "w": 180,
+          "pos": [
+            619,
+            69
+          ]
+        },
+        {
+          "id": "tl_op",
+          "kind": "green",
+          "title": "Operator / Responses API",
+          "sub": "Jan – Mar 2025",
+          "body": "computer use + agent as a primitive",
+          "w": 195,
+          "pos": [
+            873,
+            -51
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "tl_hub",
+          "to": "tl_react",
+          "label": ":starts"
+        },
+        {
+          "from": "tl_react",
+          "to": "tl_baby",
+          "label": ":then"
+        },
+        {
+          "from": "tl_baby",
+          "to": "tl_fc",
+          "label": ":then"
+        },
+        {
+          "from": "tl_fc",
+          "to": "tl_ag",
+          "label": ":then"
+        },
+        {
+          "from": "tl_ag",
+          "to": "tl_lg",
+          "label": ":then"
+        },
+        {
+          "from": "tl_lg",
+          "to": "tl_gr",
+          "label": ":then"
+        },
+        {
+          "from": "tl_gr",
+          "to": "tl_mcp",
+          "label": ":then"
+        },
+        {
+          "from": "tl_mcp",
+          "to": "tl_op",
+          "label": ":then"
+        }
+      ]
+    },
+    {
+      "id": "inversion",
+      "title": "The inversion",
+      "caption": "the ontology doesn’t disappear — it moves from the front of a dead-end pipeline into the loop itself",
+      "anchor": [
+        3084,
+        901
+      ],
+      "nodes": [
+        {
+          "id": "inv_g_old",
+          "kind": "ghost tan",
+          "title": "graph-first",
+          "w": 140,
+          "pos": [
+            -490,
+            -370
+          ]
+        },
+        {
+          "id": "inv_ont_old",
+          "kind": "tan",
+          "title": "ontology",
+          "sub": "the prerequisite",
+          "body": "classes, relations, constraints — designed before use",
+          "w": 190,
+          "pos": [
+            -535,
+            -244
+          ]
+        },
+        {
+          "id": "inv_ing",
+          "kind": "tan",
+          "title": "ingestion & schema",
+          "sub": "built before anyone benefits",
+          "w": 185,
+          "pos": [
+            -499,
+            22
+          ]
+        },
+        {
+          "id": "inv_use_old",
+          "kind": "tan",
+          "title": "usage",
+          "sub": "finally — if anyone still trusts it",
+          "w": 180,
+          "pos": [
+            -506,
+            187
+          ]
+        },
+        {
+          "id": "inv_decay",
+          "kind": "tan",
+          "title": "trust decays",
+          "sub": "no correction loop · stale facts",
+          "w": 180,
+          "pos": [
+            -295,
+            347
+          ]
+        },
+        {
+          "id": "inv_g_new",
+          "kind": "ghost green",
+          "title": "agent-first",
+          "w": 140,
+          "pos": [
+            300,
+            -370
+          ]
+        },
+        {
+          "id": "inv_use_new",
+          "kind": "green",
+          "title": "usage",
+          "sub": "agent workflows run day one",
+          "w": 180,
+          "pos": [
+            300,
+            -200
+          ]
+        },
+        {
+          "id": "inv_prop",
+          "kind": "green",
+          "title": "proposals",
+          "sub": "LLM extracts nodes + edges from traces",
+          "w": 185,
+          "pos": [
+            555,
+            -15
+          ]
+        },
+        {
+          "id": "inv_val",
+          "kind": "green",
+          "title": "validators",
+          "sub": "humans + rules approve or reject",
+          "w": 180,
+          "pos": [
+            278,
+            167
+          ]
+        },
+        {
+          "id": "inv_ont_new",
+          "kind": "indigo",
+          "title": "ontology",
+          "sub": "the runtime contract",
+          "body": "hardened where correctness matters",
+          "w": 185,
+          "pos": [
+            45,
+            -15
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "inv_ont_old",
+          "to": "inv_ing",
+          "label": ":then",
+          "kind": "chain"
+        },
+        {
+          "from": "inv_ing",
+          "to": "inv_use_old",
+          "label": ":then",
+          "kind": "chain"
+        },
+        {
+          "from": "inv_use_old",
+          "to": "inv_decay",
+          "label": ":dead_end",
+          "kind": "chain"
+        },
+        {
+          "from": "inv_use_new",
+          "to": "inv_prop",
+          "kind": "cycle",
+          "curve": -40
+        },
+        {
+          "from": "inv_prop",
+          "to": "inv_val",
+          "kind": "cycle",
+          "curve": -40
+        },
+        {
+          "from": "inv_val",
+          "to": "inv_ont_new",
+          "kind": "cycle",
+          "curve": -40
+        },
+        {
+          "from": "inv_ont_new",
+          "to": "inv_use_new",
+          "label": ":next_run",
+          "kind": "cycle",
+          "curve": -40
+        },
+        {
+          "from": "inv_ont_old",
+          "to": "inv_ont_new",
+          "label": ":moves",
+          "kind": "moves"
+        }
+      ]
+    },
+    {
+      "id": "job",
+      "title": "The job, before and after",
+      "caption": "trust decay created a new job — from finishing the ontology to keeping the agent's living state trustworthy",
+      "anchor": [
+        2589,
+        1058
+      ],
+      "include": [
+        "ev_hub",
+        "inv_decay",
+        "inv_ont_new"
+      ],
+      "nodes": [
+        {
+          "id": "st_before",
+          "kind": "tan",
+          "title": "the old job",
+          "sub": "finish the ontology",
+          "body": "model every fact before anyone benefits",
+          "w": 190,
+          "pos": [
+            -450,
+            -210
+          ]
+        },
+        {
+          "id": "st_after",
+          "kind": "green",
+          "title": "the new job",
+          "sub": "keep living state trustworthy",
+          "body": "harden what agents actually use",
+          "w": 195,
+          "pos": [
+            77,
+            -215
+          ]
+        },
+        {
+          "id": "st_hub",
+          "kind": "circle hub indigo",
+          "title": "agent state",
+          "sub": "memory · context · action",
+          "w": 200,
+          "pos": [
+            76,
+            103
+          ]
+        },
+        {
+          "id": "st_id",
+          "kind": "indigo",
+          "title": "identity",
+          "sub": "who is who?",
+          "w": 145,
+          "pos": [
+            -349,
+            61
+          ]
+        },
+        {
+          "id": "st_perm",
+          "kind": "green",
+          "title": "permissions",
+          "sub": "who can see or act?",
+          "w": 165,
+          "pos": [
+            -277,
+            277
+          ]
+        },
+        {
+          "id": "st_time",
+          "kind": "indigo",
+          "title": "temporal truth",
+          "sub": "what was true when?",
+          "w": 170,
+          "pos": [
+            79,
+            350
+          ]
+        },
+        {
+          "id": "st_prov",
+          "kind": "green",
+          "title": "provenance",
+          "sub": "why believe this?",
+          "w": 160,
+          "pos": [
+            392,
+            280
+          ]
+        },
+        {
+          "id": "st_corr",
+          "kind": "indigo",
+          "title": "correction loop",
+          "sub": "how does it improve?",
+          "w": 170,
+          "pos": [
+            460,
+            50
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "st_before",
+          "to": "st_after",
+          "label": ":becomes",
+          "kind": "moves"
+        },
+        {
+          "from": "st_after",
+          "to": "st_hub",
+          "label": ":tends"
+        },
+        {
+          "from": "st_hub",
+          "to": "st_id"
+        },
+        {
+          "from": "st_hub",
+          "to": "st_perm"
+        },
+        {
+          "from": "st_hub",
+          "to": "st_time"
+        },
+        {
+          "from": "st_hub",
+          "to": "st_prov"
+        },
+        {
+          "from": "st_hub",
+          "to": "st_corr"
+        },
+        {
+          "from": "st_hub",
+          "to": "ev_hub",
+          "label": ":one_world_graph"
+        },
+        {
+          "from": "inv_decay",
+          "to": "st_after",
+          "label": ":creates_the_job",
+          "kind": "chain"
+        },
+        {
+          "from": "inv_ont_new",
+          "to": "st_hub",
+          "label": ":governs"
+        }
+      ]
+    },
+    {
+      "id": "market",
+      "title": "The market organizes around the same questions",
+      "caption": "six segments — each one sells an answer to a question this talk already asked",
+      "anchor": [
+        2027,
+        1846
+      ],
+      "nodes": [
+        {
+          "id": "mk_hub",
+          "kind": "hub ink",
+          "title": "The graph market",
+          "sub": "six segments · one stack",
+          "w": 230,
+          "pos": [
+            17,
+            -388
+          ]
+        },
+        {
+          "id": "seg_db",
+          "kind": "indigo",
+          "title": "Graph databases",
+          "sub": "store the world graph",
+          "w": 195,
+          "pos": [
+            -470,
+            -155
+          ]
+        },
+        {
+          "id": "seg_build",
+          "kind": "green",
+          "title": "KG construction",
+          "sub": "documents → nodes + edges",
+          "w": 200,
+          "pos": [
+            -6,
+            -195
+          ]
+        },
+        {
+          "id": "seg_mem",
+          "kind": "green",
+          "title": "Agent memory",
+          "sub": "temporal state for agents",
+          "w": 195,
+          "pos": [
+            470,
+            -155
+          ]
+        },
+        {
+          "id": "seg_kg",
+          "kind": "tan",
+          "title": "Semantic KG platforms",
+          "sub": "the schema-first lineage",
+          "w": 205,
+          "pos": [
+            -470,
+            145
+          ]
+        },
+        {
+          "id": "seg_er",
+          "kind": "indigo",
+          "title": "Entity resolution",
+          "sub": "who is who, at scale",
+          "w": 190,
+          "pos": [
+            0,
+            185
+          ]
+        },
+        {
+          "id": "seg_viz",
+          "kind": "tan",
+          "title": "Graph viz & investigation",
+          "sub": "seeing the topology",
+          "w": 215,
+          "pos": [
+            470,
+            145
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "mk_hub",
+          "to": "seg_db"
+        },
+        {
+          "from": "mk_hub",
+          "to": "seg_build"
+        },
+        {
+          "from": "mk_hub",
+          "to": "seg_mem"
+        },
+        {
+          "from": "mk_hub",
+          "to": "seg_kg"
+        },
+        {
+          "from": "mk_hub",
+          "to": "seg_er"
+        },
+        {
+          "from": "mk_hub",
+          "to": "seg_viz"
+        }
+      ]
+    },
+    {
+      "id": "companies",
+      "title": "…and who is building it",
+      "caption": "27 companies, bootstrapped engines to $2.6B platforms — Zep you have already met",
+      "anchor": [
+        2027,
+        1846
+      ],
+      "include": [
+        "mk_hub",
+        "seg_db",
+        "seg_build",
+        "seg_mem",
+        "seg_kg",
+        "seg_er",
+        "seg_viz",
+        "t_zep"
+      ],
+      "nodes": [
+        {
+          "id": "co_neo4j",
+          "kind": "tiny indigo",
+          "title": "Neo4j",
+          "w": 88,
+          "pos": [
+            -642,
+            -75
+          ],
+          "sub": "~$581M · category leader"
+        },
+        {
+          "id": "co_tigergraph",
+          "kind": "tiny indigo",
+          "title": "TigerGraph",
+          "w": 106,
+          "pos": [
+            -660,
+            -155
+          ],
+          "sub": "$170M+ · FSI scale"
+        },
+        {
+          "id": "co_memgraph",
+          "kind": "tiny indigo",
+          "title": "Memgraph",
+          "w": 90,
+          "pos": [
+            -642,
+            -235
+          ]
+        },
+        {
+          "id": "co_arangodb",
+          "kind": "tiny indigo",
+          "title": "ArangoDB",
+          "w": 90,
+          "pos": [
+            -592,
+            -301
+          ]
+        },
+        {
+          "id": "co_hypermodedgrap",
+          "kind": "tiny indigo",
+          "title": "Hypermode (Dgraph)",
+          "w": 170,
+          "pos": [
+            -519,
+            -339
+          ]
+        },
+        {
+          "id": "co_falkordb",
+          "kind": "tiny indigo",
+          "title": "FalkorDB",
+          "w": 90,
+          "pos": [
+            -758,
+            -56
+          ]
+        },
+        {
+          "id": "co_nebulagraph",
+          "kind": "tiny indigo",
+          "title": "NebulaGraph",
+          "w": 114,
+          "pos": [
+            -770,
+            -210
+          ]
+        },
+        {
+          "id": "co_ultipa",
+          "kind": "tiny indigo",
+          "title": "Ultipa",
+          "w": 88,
+          "pos": [
+            -707,
+            -347
+          ]
+        },
+        {
+          "id": "co_puppygraph",
+          "kind": "tiny indigo",
+          "title": "PuppyGraph",
+          "w": 106,
+          "pos": [
+            -566,
+            -432
+          ],
+          "sub": "zero-ETL on lakehouse"
+        },
+        {
+          "id": "co_diffbot",
+          "kind": "tiny green",
+          "title": "Diffbot",
+          "w": 88,
+          "pos": [
+            -145,
+            -345
+          ],
+          "sub": "10B-entity web KG"
+        },
+        {
+          "id": "co_lettria",
+          "kind": "tiny green",
+          "title": "Lettria",
+          "w": 88,
+          "pos": [
+            -74,
+            -349
+          ]
+        },
+        {
+          "id": "co_graphlit",
+          "kind": "tiny green",
+          "title": "Graphlit",
+          "w": 90,
+          "pos": [
+            102,
+            -441
+          ]
+        },
+        {
+          "id": "co_whyhowai",
+          "kind": "tiny green",
+          "title": "WhyHow.AI",
+          "w": 98,
+          "pos": [
+            213,
+            -327
+          ]
+        },
+        {
+          "id": "co_mem0",
+          "kind": "tiny green",
+          "title": "Mem0",
+          "w": 88,
+          "pos": [
+            599,
+            -252
+          ],
+          "sub": "~$24M · AWS default"
+        },
+        {
+          "id": "co_cognee",
+          "kind": "tiny green",
+          "title": "Cognee",
+          "w": 88,
+          "pos": [
+            665,
+            -164
+          ],
+          "sub": "$7.5M seed · OSS"
+        },
+        {
+          "id": "co_stardog",
+          "kind": "tiny tan",
+          "title": "Stardog",
+          "w": 88,
+          "pos": [
+            -519,
+            329
+          ],
+          "sub": "enterprise KG · Voicebox"
+        },
+        {
+          "id": "co_graphwiseontot",
+          "kind": "tiny tan",
+          "title": "Graphwise (Ontotext)",
+          "w": 186,
+          "pos": [
+            -642,
+            225
+          ]
+        },
+        {
+          "id": "co_franzallegrogr",
+          "kind": "tiny tan",
+          "title": "Franz (AllegroGraph)",
+          "w": 186,
+          "pos": [
+            -642,
+            65
+          ]
+        },
+        {
+          "id": "co_eccenca",
+          "kind": "tiny tan",
+          "title": "eccenca",
+          "w": 88,
+          "pos": [
+            -579,
+            430
+          ]
+        },
+        {
+          "id": "co_metaphacts",
+          "kind": "tiny tan",
+          "title": "metaphacts",
+          "w": 106,
+          "pos": [
+            -746,
+            274
+          ]
+        },
+        {
+          "id": "co_timbrai",
+          "kind": "tiny tan",
+          "title": "Timbr.ai",
+          "w": 90,
+          "pos": [
+            -758,
+            46
+          ]
+        },
+        {
+          "id": "co_quantexa",
+          "kind": "tiny indigo",
+          "title": "Quantexa",
+          "w": 90,
+          "pos": [
+            103,
+            350
+          ],
+          "sub": "$2.6B valuation"
+        },
+        {
+          "id": "co_senzing",
+          "kind": "tiny indigo",
+          "title": "Senzing",
+          "w": 88,
+          "pos": [
+            0,
+            380
+          ],
+          "sub": "bootstrapped · 100B records"
+        },
+        {
+          "id": "co_tilores",
+          "kind": "tiny indigo",
+          "title": "Tilores",
+          "w": 88,
+          "pos": [
+            -103,
+            350
+          ]
+        },
+        {
+          "id": "co_linkurious",
+          "kind": "tiny tan",
+          "title": "Linkurious",
+          "w": 106,
+          "pos": [
+            664,
+            121
+          ]
+        },
+        {
+          "id": "co_cambridgeintel",
+          "kind": "tiny tan",
+          "title": "Cambridge Intelligence",
+          "w": 190,
+          "pos": [
+            647,
+            227
+          ]
+        },
+        {
+          "id": "co_graphistry",
+          "kind": "tiny tan",
+          "title": "Graphistry",
+          "w": 106,
+          "pos": [
+            576,
+            309
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "seg_db",
+          "to": "co_neo4j"
+        },
+        {
+          "from": "seg_db",
+          "to": "co_tigergraph"
+        },
+        {
+          "from": "seg_db",
+          "to": "co_memgraph"
+        },
+        {
+          "from": "seg_db",
+          "to": "co_arangodb"
+        },
+        {
+          "from": "seg_db",
+          "to": "co_hypermodedgrap"
+        },
+        {
+          "from": "seg_db",
+          "to": "co_falkordb"
+        },
+        {
+          "from": "seg_db",
+          "to": "co_nebulagraph"
+        },
+        {
+          "from": "seg_db",
+          "to": "co_ultipa"
+        },
+        {
+          "from": "seg_db",
+          "to": "co_puppygraph"
+        },
+        {
+          "from": "seg_build",
+          "to": "co_diffbot"
+        },
+        {
+          "from": "seg_build",
+          "to": "co_lettria"
+        },
+        {
+          "from": "seg_build",
+          "to": "co_graphlit"
+        },
+        {
+          "from": "seg_build",
+          "to": "co_whyhowai"
+        },
+        {
+          "from": "seg_mem",
+          "to": "co_mem0"
+        },
+        {
+          "from": "seg_mem",
+          "to": "co_cognee"
+        },
+        {
+          "from": "seg_kg",
+          "to": "co_stardog"
+        },
+        {
+          "from": "seg_kg",
+          "to": "co_graphwiseontot"
+        },
+        {
+          "from": "seg_kg",
+          "to": "co_franzallegrogr"
+        },
+        {
+          "from": "seg_kg",
+          "to": "co_eccenca"
+        },
+        {
+          "from": "seg_kg",
+          "to": "co_metaphacts"
+        },
+        {
+          "from": "seg_kg",
+          "to": "co_timbrai"
+        },
+        {
+          "from": "seg_er",
+          "to": "co_quantexa"
+        },
+        {
+          "from": "seg_er",
+          "to": "co_senzing"
+        },
+        {
+          "from": "seg_er",
+          "to": "co_tilores"
+        },
+        {
+          "from": "seg_viz",
+          "to": "co_linkurious"
+        },
+        {
+          "from": "seg_viz",
+          "to": "co_cambridgeintel"
+        },
+        {
+          "from": "seg_viz",
+          "to": "co_graphistry"
+        },
+        {
+          "from": "seg_mem",
+          "to": "t_zep"
+        }
+      ]
+    },
+    {
+      "id": "map",
+      "title": "Pick your graph",
+      "caption": "the tech from the history is the on-ramp — pick a graph type, prototype, then push where it breaks",
+      "anchor": [
+        2252,
+        1193
+      ],
+      "include": [
+        "tl_ag",
+        "tl_lg",
+        "tl_gr",
+        "tl_mcp",
+        "tl_op"
+      ],
+      "nodes": [
+        {
+          "id": "ex_hub",
+          "kind": "hub ink",
+          "title": "Pick your graph",
+          "sub": "try → prototype → push the frontier",
+          "w": 235,
+          "pos": [
+            59,
+            -161
+          ]
+        },
+        {
+          "id": "ex_teams",
+          "kind": "green",
+          "title": "Agent teams",
+          "sub": "handoff / role graphs",
+          "body": "frontier: topology learning",
+          "w": 180,
+          "pos": [
+            -700,
+            100
+          ]
+        },
+        {
+          "id": "ex_reason",
+          "kind": "indigo",
+          "title": "Reasoning / plans",
+          "sub": "branch → score → select",
+          "body": "frontier: verifier evals",
+          "w": 185,
+          "pos": [
+            -443,
+            56
+          ]
+        },
+        {
+          "id": "ex_know",
+          "kind": "indigo",
+          "title": "Knowledge / memory",
+          "sub": "event-sourced temporal KG",
+          "body": "frontier: identity + time benchmarks",
+          "w": 195,
+          "pos": [
+            -180,
+            100
+          ]
+        },
+        {
+          "id": "ex_tools",
+          "kind": "tan",
+          "title": "Tools / skills",
+          "sub": "typed registry + permission edges",
+          "body": "frontier: safety invariants",
+          "w": 190,
+          "pos": [
+            88,
+            38
+          ]
+        },
+        {
+          "id": "ex_world",
+          "kind": "green",
+          "title": "World / UI",
+          "sub": "DOM → affordance graph",
+          "body": "frontier: robust state abstraction",
+          "w": 185,
+          "pos": [
+            340,
+            100
+          ]
+        },
+        {
+          "id": "ex_traces",
+          "kind": "indigo",
+          "title": "Traces / evals",
+          "sub": "run trace as replayable graph",
+          "body": "frontier: replay / fork / diff loops",
+          "w": 190,
+          "pos": [
+            646,
+            78
+          ]
+        },
+        {
+          "id": "t_zep",
+          "kind": "green",
+          "title": "Zep / Graphiti",
+          "sub": "temporal memory graphs",
+          "w": 160,
+          "pos": [
+            -197,
+            355
+          ]
+        },
+        {
+          "id": "t_lsmith",
+          "kind": "indigo",
+          "title": "LangSmith / Phoenix",
+          "sub": "trace observability",
+          "w": 175,
+          "pos": [
+            600,
+            301
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "ex_hub",
+          "to": "ex_teams"
+        },
+        {
+          "from": "ex_hub",
+          "to": "ex_reason"
+        },
+        {
+          "from": "ex_hub",
+          "to": "ex_know"
+        },
+        {
+          "from": "ex_hub",
+          "to": "ex_tools"
+        },
+        {
+          "from": "ex_hub",
+          "to": "ex_world"
+        },
+        {
+          "from": "ex_hub",
+          "to": "ex_traces"
+        },
+        {
+          "from": "ex_teams",
+          "to": "tl_ag",
+          "label": ":try"
+        },
+        {
+          "from": "ex_reason",
+          "to": "tl_lg",
+          "label": ":try"
+        },
+        {
+          "from": "ex_know",
+          "to": "tl_gr",
+          "label": ":try"
+        },
+        {
+          "from": "ex_know",
+          "to": "t_zep",
+          "label": ":try"
+        },
+        {
+          "from": "ex_tools",
+          "to": "tl_mcp",
+          "label": ":try"
+        },
+        {
+          "from": "ex_world",
+          "to": "tl_op",
+          "label": ":try"
+        },
+        {
+          "from": "ex_traces",
+          "to": "t_lsmith",
+          "label": ":try"
+        }
+      ]
+    },
+    {
+      "id": "loops",
+      "title": "The loop above the loop",
+      "caption": "agents improve by running; communities improve by sharing; you improve by shortening your own learning cycle",
+      "anchor": [
+        3332,
+        1148
+      ],
+      "layout": {
+        "floatAmp": 5
+      },
+      "nodes": [
+        {
+          "id": "lp_agent",
+          "kind": "ring indigo",
+          "title": "agent loop",
+          "r": 88,
+          "pos": [
+            -50,
+            -150
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_comm",
+          "kind": "ring green",
+          "title": "community loop",
+          "r": 114,
+          "pos": [
+            93,
+            -7
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_dev",
+          "kind": "ring tan",
+          "title": "developer loop",
+          "r": 142,
+          "pos": [
+            -27,
+            218
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_obs",
+          "kind": "tiny indigo",
+          "title": "observe",
+          "w": 88,
+          "pos": [
+            -50,
+            -238
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_rsn",
+          "kind": "tiny indigo",
+          "title": "reason",
+          "w": 84,
+          "pos": [
+            26,
+            -106
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_act",
+          "kind": "tiny indigo",
+          "title": "act",
+          "w": 64,
+          "pos": [
+            -126,
+            -106
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_trc",
+          "kind": "tiny green",
+          "title": "traces",
+          "w": 80,
+          "pos": [
+            93,
+            -121
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_pat",
+          "kind": "tiny green",
+          "title": "patterns",
+          "w": 92,
+          "pos": [
+            192,
+            50
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_std",
+          "kind": "tiny green",
+          "title": "standards",
+          "w": 98,
+          "pos": [
+            -6,
+            50
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_ins",
+          "kind": "tiny tan",
+          "title": "instrument",
+          "w": 104,
+          "pos": [
+            -27,
+            76
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_cmp",
+          "kind": "tiny tan",
+          "title": "compare",
+          "w": 94,
+          "pos": [
+            96,
+            289
+          ],
+          "floatPhase": 0
+        },
+        {
+          "id": "lp_shr",
+          "kind": "tiny tan",
+          "title": "share",
+          "w": 74,
+          "pos": [
+            -150,
+            289
+          ],
+          "floatPhase": 0
+        }
+      ],
+      "edges": [
+        {
+          "from": "lp_obs",
+          "to": "lp_rsn",
+          "kind": "loopi",
+          "curve": -28
+        },
+        {
+          "from": "lp_rsn",
+          "to": "lp_act",
+          "kind": "loopi",
+          "curve": -28
+        },
+        {
+          "from": "lp_act",
+          "to": "lp_obs",
+          "kind": "loopi",
+          "curve": -28
+        },
+        {
+          "from": "lp_trc",
+          "to": "lp_pat",
+          "kind": "loopg",
+          "curve": -34
+        },
+        {
+          "from": "lp_pat",
+          "to": "lp_std",
+          "kind": "loopg",
+          "curve": -34
+        },
+        {
+          "from": "lp_std",
+          "to": "lp_trc",
+          "kind": "loopg",
+          "curve": -34
+        },
+        {
+          "from": "lp_ins",
+          "to": "lp_cmp",
+          "kind": "loopt",
+          "curve": -42
+        },
+        {
+          "from": "lp_cmp",
+          "to": "lp_shr",
+          "kind": "loopt",
+          "curve": -42
+        },
+        {
+          "from": "lp_shr",
+          "to": "lp_ins",
+          "kind": "loopt",
+          "curve": -42
+        }
+      ]
+    },
+    {
+      "id": "close",
+      "title": "(you)-[:builds]->(graphs)",
+      "caption": "thank you — go draw the edges",
+      "anchor": [
+        3242,
+        1441
+      ],
+      "layout": {
+        "fitMargin": 230,
+        "zoomMax": 0.85
+      },
+      "nodes": [
+        {
+          "id": "yg_you",
+          "kind": "tiny ink",
+          "title": "you",
+          "w": 90,
+          "pos": [
+            -120,
+            -50
+          ]
+        },
+        {
+          "id": "yg_graphs",
+          "kind": "tiny indigo",
+          "title": "graphs",
+          "w": 100,
+          "pos": [
+            120,
+            60
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "from": "yg_you",
+          "to": "yg_graphs",
+          "label": ":builds"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "re_rows",
+      "to": "oc_chaos",
+      "label": ":same_shape",
+      "kind": "cross"
+    },
+    {
+      "from": "re_edges",
+      "to": "oc_order",
+      "label": ":same_shape",
+      "kind": "cross"
+    },
+    {
+      "from": "ex_reason",
+      "to": "tl_baby",
+      "label": ":tot_lineage",
+      "kind": "cross"
+    },
+    {
+      "from": "st_corr",
+      "to": "inv_val",
+      "label": ":same_muscle",
+      "kind": "cross"
+    },
+    {
+      "from": "st_prov",
+      "to": "ev_beliefs",
+      "label": ":same_question",
+      "kind": "cross"
+    },
+    {
+      "from": "st_id",
+      "to": "ex_know",
+      "label": ":benchmarked_by",
+      "kind": "cross"
+    },
+    {
+      "from": "lp_agent",
+      "to": "tl_react",
+      "label": ":since_2022",
+      "kind": "cross"
+    },
+    {
+      "from": "lp_agent",
+      "to": "st_hub",
+      "label": ":writes",
+      "kind": "cross"
+    },
+    {
+      "from": "lp_std",
+      "to": "tl_mcp",
+      "label": ":example",
+      "kind": "cross"
+    },
+    {
+      "from": "lp_trc",
+      "to": "ex_traces",
+      "label": ":fuel",
+      "kind": "cross"
+    },
+    {
+      "from": "lp_dev",
+      "to": "yg_you",
+      "label": ":is_yours",
+      "kind": "cross"
+    },
+    {
+      "from": "yg_graphs",
+      "to": "t_hub",
+      "label": ":are_awesome",
+      "kind": "cross"
+    },
+    {
+      "from": "t_hub",
+      "to": "oc_data",
+      "label": ":begins",
+      "kind": "spine"
+    },
+    {
+      "from": "oc_data",
+      "to": "ev_hub",
+      "kind": "spine"
+    },
+    {
+      "from": "ev_hub",
+      "to": "tl_hub",
+      "kind": "spine"
+    },
+    {
+      "from": "tl_op",
+      "to": "inv_ont_old",
+      "kind": "spine"
+    },
+    {
+      "from": "inv_ont_new",
+      "to": "st_after",
+      "kind": "spine"
+    },
+    {
+      "from": "ex_hub",
+      "to": "lp_dev",
+      "kind": "spine"
+    },
+    {
+      "from": "lp_comm",
+      "to": "yg_you",
+      "kind": "spine"
+    },
+    {
+      "from": "seg_er",
+      "to": "st_id",
+      "label": ":answers",
+      "kind": "cross"
+    },
+    {
+      "from": "seg_mem",
+      "to": "st_time",
+      "label": ":answers",
+      "kind": "cross"
+    },
+    {
+      "from": "seg_kg",
+      "to": "st_prov",
+      "label": ":answers",
+      "kind": "cross"
+    },
+    {
+      "from": "seg_kg",
+      "to": "inv_ont_old",
+      "label": ":lineage",
+      "kind": "cross"
+    },
+    {
+      "from": "seg_build",
+      "to": "inv_prop",
+      "label": ":industrializes",
+      "kind": "cross"
+    },
+    {
+      "from": "seg_viz",
+      "to": "oc_order",
+      "label": ":sells_order",
+      "kind": "cross"
+    },
+    {
+      "from": "seg_db",
+      "to": "ev_hub",
+      "label": ":persists",
+      "kind": "cross"
+    },
+    {
+      "from": "st_before",
+      "to": "inv_ont_old",
+      "label": ":made_this",
+      "kind": "cross"
+    },
+    {
+      "from": "co_neo4j",
+      "to": "ex_know",
+      "label": ":also_try",
+      "kind": "cross"
+    },
+    {
+      "from": "st_after",
+      "to": "mk_hub",
+      "kind": "spine"
+    },
+    {
+      "from": "mk_hub",
+      "to": "ex_hub",
+      "kind": "spine"
+    }
+  ]
+};
+try {
+  boot(EMBEDDED_DECK);
+} catch(err){
+  __showErr(err.message, 0, err);
+  throw err;
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
