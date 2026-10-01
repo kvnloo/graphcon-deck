@@ -1,0 +1,33 @@
+version: 1
+repo: kvnloo/graphcon-deck
+id: graphcon-deck
+kind: suite
+summary: Lightweight spatial graph-presentation substrate adapted by z0archy for authored architecture scenes and interactive semantic exploration.
+
+architecture:
+  subsystems:
+    - id: deck-runtime
+      name: Graph deck runtime
+      kind: presentation
+      summary: Renders authored graph nodes, spatial scenes, labels, connections, navigation, and interaction in a zero-build browser surface.
+      paths: [index.html]
+    - id: presentation-contract
+      name: Presentation contract
+      kind: presentation
+      summary: Defines the minimal graph-deck presentation surface inherited and extended by z0archy without owning Zer0 semantics.
+      paths: [README.md, index.html]
+      depends_on: [deck-runtime]
+
+  provides_interfaces: []
+  consumes_interfaces: []
+  produces_representations: []
+  consumes_representations: []
+
+  boundaries:
+    owns: [spatial graph presentation substrate]
+    not_here: [Zer0 architecture semantics, repository evidence resolution, z0archy history or compression authority]
+
+  evidence:
+    docs: [README.md]
+    tests: []
+    schemas: []
